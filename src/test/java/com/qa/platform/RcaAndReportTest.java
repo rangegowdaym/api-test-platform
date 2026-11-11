@@ -4,7 +4,6 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
 import com.qa.platform.common.Json;
-import com.qa.platform.common.LlmClient;
 import com.qa.platform.common.Masking;
 import com.qa.platform.generate.CaseStore;
 import com.qa.platform.model.Evidence;
@@ -31,7 +30,7 @@ public class RcaAndReportTest {
 
     // no LLM: one UNCLASSIFIED placeholder per failure, waiting for the AI (ai rca / /rca)
     RcaEngine.Report r = new RcaEngine(ev, root.resolve("run-summary.json"), root.resolve("history"), root.resolve("rca"),
-        new CaseStore(root.resolve("testcases")), new LlmClient(false)).run();
+        new CaseStore(root.resolve("testcases")), null).run();
     assertEquals(r.failures(), 3);
     assertEquals(r.groups(), 3);
     assertTrue(r.entries().stream().allMatch(e -> "UNCLASSIFIED".equals(e.category())));

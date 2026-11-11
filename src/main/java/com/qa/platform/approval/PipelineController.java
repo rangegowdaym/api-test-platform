@@ -19,8 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <pre>
  * POST /api/automation/generate AI: features + &lt;Tag&gt;Api + &lt;Tag&gt;Steps for the APPROVED cases
+ * GET  /api/ai/options          who answers (LLM or Copilot), queued tasks, specs
+ * POST /api/ai/{task}           run an AI task (answered now with a token, else queued for Copilot)
+ * POST /api/ai/apply            apply answers Copilot wrote (same as "ai apply")
  * GET  /api/run/options         environments + feature tags for the Execute dialog
- * POST /api/runs                Execute tests  {env, tags, threads, llm}
+ * POST /api/runs                Execute tests  {env, tags, threads, ai, heal}
  * GET  /api/runs/current?from=N run status + log lines from N
  * POST /api/runs/cancel
  * GET  /api/doctor?env=qa       environment check (config, secrets set, proxy, company CA, reachability)
@@ -32,10 +35,12 @@ public class PipelineController {
 
   private final PipelineService pipeline;
   private final TestRunService runs;
+  private final AiService ai;
 
-  public PipelineController(PipelineService pipeline, TestRunService runs) {
+  public PipelineController(PipelineService pipeline, TestRunService runs, AiService ai) {
     this.pipeline = pipeline;
     this.runs = runs;
+    this.ai = ai;
   }
 
   /** AI writes feature files, <Tag>Api and <Tag>Steps for the APPROVED cases (all tags, or ?tag=orders). */
@@ -48,8 +53,7 @@ public class PipelineController {
   public Map<String, Object> options() throws Exception {
     Map<String, Object> out = new LinkedHashMap<>(pipeline.options());
     out.put("current", runs.current());
-    // the LLM checkbox is only offered when a token for the configured provider is present on the server
-    out.put("llmAvailable", new com.qa.platform.common.LlmClient().configured());
+    out.put("llmAvailable", new com.qa.platform.ai.AiRunner().llmAvailable());
     return out;
   }
 
@@ -61,46 +65,38 @@ public class PipelineController {
   @GetMapping("/runs/current")
   public TestRunService.Log current(@RequestParam(defaultValue = "0") int from) { return runs.log(from); }
 
-  /** AI assist: what is available, and the specs the tasks can work on. */
+  /** Who answers AI tasks (LLM API or Copilot), the tasks queued for Copilot, and the specs the tasks can use. */
   @GetMapping("/ai/options")
   public Map<String, Object> aiOptions() throws Exception {
-    var llm = new com.qa.platform.common.LlmClient(true);
-    Map<String, Object> out = new LinkedHashMap<>();
-    out.put("llmAvailable", llm.configured());
-    out.put("provider", llm.model());
-    out.put("tasks", com.qa.platform.ai.AiTasks.NAMES);
+    Map<String, Object> out = new LinkedHashMap<>(ai.status());
     out.put("specs", pipeline.specs().stream().map(p -> com.qa.platform.common.Workspace.rel(java.nio.file.Path.of(p))).toList());
     return out;
   }
 
-  /**
-   * POST /api/ai/{task} {spec?, context?}: runs the task with the server's LLM. The browser has no IDE agent, so
-   * without a token the answer is 409 with the agent-mode command to use in VS Code instead.
-   */
+  /** POST /api/ai/{task} {spec?, context?, tag?}: answered now with the server's LLM token, else queued for Copilot. */
   @PostMapping("/ai/{task}")
   public com.qa.platform.ai.AiRunner.Result ai(@org.springframework.web.bind.annotation.PathVariable String task,
                                                @RequestBody(required = false) Map<String, String> body) throws Exception {
-    if (!List.of("testcases", "spec-audit", "rca").contains(task)) {
-      throw new IllegalArgumentException("Unknown AI task for the UI: " + task);
-    }
+    if (!com.qa.platform.ai.AiTasks.NAMES.contains(task)) throw new IllegalArgumentException("Unknown AI task: " + task);
     Map<String, String> args = new LinkedHashMap<>();
     String spec = body == null ? null : body.get("spec");
     if (spec != null && !spec.isBlank()) {
       // only specs the platform already knows (specs/ or the cases' sources), never an arbitrary path
-      boolean known = pipeline.specs().stream().anyMatch(p -> p.endsWith(spec) || p.equals(spec));
-      if (!known) throw new IllegalArgumentException("Unknown spec: " + spec);
-      args.put("spec", pipeline.specs().stream().filter(p -> p.endsWith(spec) || p.equals(spec)).findFirst().orElseThrow());
+      String known = pipeline.specs().stream().filter(p -> p.endsWith(spec) || p.equals(spec)).findFirst()
+          .orElseThrow(() -> new IllegalArgumentException("Unknown spec: " + spec));
+      args.put("spec", com.qa.platform.common.Workspace.rel(java.nio.file.Path.of(known)));
+    }
+    String tag = body == null ? null : body.get("tag");
+    if (tag != null && !tag.isBlank()) {
+      if (!tag.matches("[A-Za-z0-9_.-]{1,60}")) throw new IllegalArgumentException("Bad tag: " + tag);
+      args.put("tag", tag);
     }
     if (body != null && body.get("context") != null) args.put("context", body.get("context").substring(0, Math.min(4000, body.get("context").length())));
-    var runner = new com.qa.platform.ai.AiRunner();
-    if (!runner.llmAvailable()) {
-      throw new IllegalStateException("No LLM token on the server. In VS Code Copilot agent mode run: "
-          + "java -jar target/api-test-platform.jar ai " + task + (args.containsKey("spec") ? " --spec " + spec : "") + " --mode agent");
-    }
-    synchronized (this) {
-      return runner.run(com.qa.platform.ai.AiTasks.create(task, args), com.qa.platform.ai.AiRunner.Mode.LLM);
-    }
+    return ai.run(task, args);
   }
+
+  @PostMapping("/ai/apply")
+  public List<com.qa.platform.ai.AiRunner.Result> applyAi(Principal p) throws Exception { return ai.applyAll(p.getName()); }
 
   @GetMapping("/doctor")
   public com.qa.platform.net.EnvironmentDoctor.Report doctor(@RequestParam(defaultValue = "qa") String env) throws Exception {

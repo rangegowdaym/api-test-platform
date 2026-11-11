@@ -11,7 +11,7 @@ Allow: exit 0 with no output (normal permission flow continues).
 
 Enforces the hard rules in .github/copilot-instructions.md:
   1. agents never approve test cases and never edit testcases/ directly (only testcases/_proposed/)
-  2. generated feature files, <Tag>Api and <Tag>Steps arrive only through `ai automation --apply` (validated)
+  2. generated feature files, <Tag>Api, <Tag>Steps, rca.json and the report arrive only through `ai apply` (validated)
   3. no literal secrets in config/env/*.properties
 """
 import json
@@ -70,12 +70,12 @@ if EDIT and not SHELL:
         if re.search(r"(^|/)target/ai/", p):
             continue   # answer folders of the AI tasks: --apply validates them
         if re.search(r"(^|/)src/test/resources/features/generated/", p):
-            deny("feature files are written by the AI automation task: write them into the answer folder of target/ai/automation/requests.md and run: java -jar target/api-test-platform.jar ai automation --apply (it validates them)")
+            deny("feature files are written by the AI automation/heal task: write them into the answer folder named in target/ai/<task>/requests.md and run: java -jar target/api-test-platform.jar ai apply (it validates them)")
         if re.search(r"(^|/)target/rca/rca\.json$", p) or re.search(r"(^|/)reports/index\.html$", p):
-            deny("rca.json and the report are written through the AI rca task: answer target/ai/rca/requests.md and run: java -jar target/api-test-platform.jar ai rca --apply")
+            deny("rca.json and the report are written through the AI rca task: answer target/ai/rca/requests.md and run: java -jar target/api-test-platform.jar ai apply")
         if re.search(r"(^|/)src/test/java/com/qa/automation/(api|steps)/generated/[^/]+\.java$", p) \
                 and not p.endswith("package-info.java"):
-            deny("<Tag>Api and <Tag>Steps are written by the AI automation task: write them into the answer folder of target/ai/automation/requests.md and run: java -jar target/api-test-platform.jar ai automation --apply (it validates them)")
+            deny("<Tag>Api and <Tag>Steps are written by the AI automation/heal task: write them into the answer folder named in target/ai/<task>/requests.md and run: java -jar target/api-test-platform.jar ai apply (it validates them)")
         if re.search(r"(^|/)testcases/", p) and not re.search(r"(^|/)testcases/_proposed/", p):
             deny("test cases change only through the approval UI. Write proposals to testcases/_proposed/ "
                  "and run: java -jar target/api-test-platform.jar propose --file <file>")
@@ -93,7 +93,7 @@ if SHELL:
     if re.search(r"(sed|perl|awk)\b[^|;]*-i[^|;]*testcases/", cmd) or re.search(r">\s*testcases/(?!_proposed/)", cmd):
         deny("do not rewrite testcases/ from the shell. Use the approval UI or the propose command.")
     if re.search(r"features/generated/", cmd) and re.search(r"(sed -i|>\s|tee )", cmd):
-        deny("do not edit generated features. Run: java -jar target/api-test-platform.jar features")
+        deny("do not edit generated features from the shell. Use: java -jar target/api-test-platform.jar ai heal (or ai automation), answer, ai apply")
     if re.search(r"\bgit\s+push\b", cmd):
         deny("pushing is done by a person (or by the cloud agent's own PR flow), not from the shell.")
 

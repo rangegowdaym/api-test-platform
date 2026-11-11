@@ -40,6 +40,7 @@ final class TestcasesTask implements AiTask {
   TestcasesTask(String spec, String context) {
     if (spec == null || spec.isBlank()) throw new IllegalArgumentException("testcases needs --spec (a file in specs/ or a path)");
     Path p = Path.of(spec);
+    if (!p.isAbsolute() && !Files.exists(p)) p = Workspace.ROOT.resolve(spec);
     this.file = Files.exists(p) ? p : Workspace.SPECS.resolve(spec);
     if (!Files.exists(file)) throw new IllegalArgumentException("No such spec: " + spec + " (copy it into specs/)");
     this.spec = spec;

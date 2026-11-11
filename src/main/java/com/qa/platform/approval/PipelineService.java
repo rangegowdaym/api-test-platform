@@ -21,8 +21,7 @@ import org.springframework.stereotype.Service;
 /**
  * The approval UI's pipeline: 1 Generate automation (AI) -> 2 Execute tests ({@link TestRunService}) -> 3 Open report.
  * "Generate automation" asks the AI (task "automation") to write the feature file, {@code <Tag>Api} and
- * {@code <Tag>Steps} for the APPROVED cases. In the browser that needs an LLM token on the server; without one
- * the same task runs in VS Code Copilot agent mode ({@code /ai automation}).
+ * {@code <Tag>Steps} for the APPROVED cases: answered now with an LLM token, else queued for Copilot (/ai).
  */
 @Service
 public class PipelineService {
@@ -30,19 +29,17 @@ public class PipelineService {
   private static final Pattern TAG = Pattern.compile("(?<![\\w@])@([A-Za-z0-9_.\\-]+)");
 
   private final CaseStore store;
+  private final AiService ai;
 
-  public PipelineService(CaseStore store) { this.store = store; }
+  public PipelineService(CaseStore store, AiService ai) {
+    this.store = store;
+    this.ai = ai;
+  }
 
-  public synchronized com.qa.platform.ai.AiRunner.Result generateAutomation(String tag) throws Exception {
+  public com.qa.platform.ai.AiRunner.Result generateAutomation(String tag) throws Exception {
     long approved = store.readAll().stream().filter(t -> TestCase.APPROVED.equals(t.status())).count();
     if (approved == 0) throw new IllegalStateException("No APPROVED cases yet: approve some first.");
-    var runner = new com.qa.platform.ai.AiRunner();
-    if (!runner.llmAvailable()) {
-      throw new IllegalStateException("No LLM token on the server. In VS Code Copilot agent mode run: /ai automation"
-          + (tag == null || tag.isBlank() ? "" : " --tag " + tag) + "  (or configure LLM_PROVIDER, README section 6a)");
-    }
-    Map<String, String> args = tag == null || tag.isBlank() ? Map.of() : Map.of("tag", tag);
-    return runner.run(com.qa.platform.ai.AiTasks.create("automation", args), com.qa.platform.ai.AiRunner.Mode.LLM);
+    return ai.run("automation", tag == null || tag.isBlank() ? Map.of() : Map.of("tag", tag));
   }
 
   /** Specs the stored cases were generated from that can still be read, else every file in specs/. */

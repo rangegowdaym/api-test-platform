@@ -12,7 +12,8 @@
   <div class="counters" id="counters"></div>
   <div class="top-actions">
     <button id="btn-import" class="ghost">Import spec</button>
-    <button id="btn-ai" class="ghost" title="AI tasks: test cases, spec audit, root cause analysis">AI assist</button>
+    <button id="btn-ai" class="ghost" title="AI tasks: test cases, spec audit, automation, root cause analysis, heal">AI assist</button>
+    <span class="ai-chip" id="ai-chip" title="Who answers the AI tasks">AI: &hellip;</span>
     <span class="user" id="user"></span>
   </div>
 </header>
@@ -43,6 +44,15 @@
     </div>
   </div>
 </nav>
+
+<!-- AI tasks queued for Copilot agent mode (no LLM token on the server). Disappears when the agent has applied them. -->
+<div class="ai-queue hidden" id="ai-queue" role="status">
+  <div class="aq-text" id="aq-text"></div>
+  <div class="aq-actions">
+    <button type="button" class="small" id="aq-copy" title="Copy the prompt for Copilot Chat">Copy /ai</button>
+    <button type="button" class="small primary" id="aq-apply" title="Apply answers Copilot wrote but did not apply (ai apply)">Apply answers</button>
+  </div>
+</div>
 
 <main class="layout">
   <aside class="filters">
@@ -166,8 +176,11 @@
       </label>
       <div class="row2">
         <label>Threads <input id="run-threads" type="number" min="1" max="16" value="4"></label>
-        <label class="inline llm hidden" id="run-llm-row"><input type="checkbox" id="run-llm"> AI root cause analysis (LLM)</label>
-        <span class="llm-note hidden" id="run-llm-note">No LLM token: failures are collected as UNCLASSIFIED. For the AI root cause analysis run <b>/rca</b> in Copilot agent mode after the run.</span>
+      </div>
+      <div class="ai-opts">
+        <label class="inline llm" id="run-ai-row"><input type="checkbox" id="run-ai" checked> AI root cause analysis</label>
+        <label class="inline llm" id="run-heal-row" title="The AI fixes failures caused by the automation or test data (never the expectations), then the tests run once more"><input type="checkbox" id="run-heal" checked> AI heal automation + re-run</label>
+        <span class="llm-note hidden" id="run-llm-note">No LLM token on the server: the AI analysis and heal are queued for Copilot. After the run type <b>/ai</b> in Copilot Chat (Agent mode).</span>
       </div>
       <div class="error" id="run-error"></div>
       <div class="dialog-actions">
@@ -200,7 +213,9 @@
     <div class="ai-actions">
       <button type="button" data-ai="testcases" class="primary">Generate test cases (AI)</button>
       <button type="button" data-ai="spec-audit">Audit spec</button>
+      <button type="button" data-ai="automation">Generate automation (AI)</button>
       <button type="button" data-ai="rca">AI root cause analysis (last run)</button>
+      <button type="button" data-ai="heal">Heal automation (last run)</button>
     </div>
     <pre class="ai-out mono" id="ai-out">AI-designed cases arrive as Pending review: you approve every one.</pre>
     <div class="dialog-actions"><button type="button" class="ghost" id="ai-close">Close</button></div>

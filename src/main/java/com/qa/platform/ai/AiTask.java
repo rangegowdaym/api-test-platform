@@ -9,8 +9,8 @@ import java.util.Map;
  *   <li><b>llm</b>: the platform sends each request to the configured LLM API ({@code LlmClient}: GitHub Models,
  *       a company OpenAI-compatible gateway, Azure OpenAI, Anthropic)</li>
  *   <li><b>agent</b>: the platform writes the requests to {@code target/ai/<task>/requests.md}; the IDE agent
- *       (GitHub Copilot agent mode, Claude Code) answers them into {@code target/ai/<task>/answers/}, then
- *       {@code ai <task> --apply} validates and applies them</li>
+ *       (GitHub Copilot agent mode, prompt /ai) answers them into {@code target/ai/<task>/answers/}, then
+ *       {@code ai apply} validates and applies them</li>
  * </ul>
  * Either way {@link #apply} is the only way an answer changes anything, so validation is the same for both.
  */

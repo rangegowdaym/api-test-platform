@@ -102,10 +102,35 @@ public class AiTasksTest {
   }
 
   @Test
+  public void queuedTasksArePendingUntilAnswered() throws Exception {
+    Path root = Files.createTempDirectory("ai-queue");
+    AiRunner runner = new AiRunner(root, new LlmClient(false));
+    FakeTask task = new FakeTask();
+    AiRunner.Result r = runner.run(task, AiRunner.Mode.AUTO);           // no LLM -> queued for Copilot
+    assertEquals(r.mode(), "agent");
+    assertEquals(r.next(), AiRunner.AGENT_HINT);
+    List<AiRunner.Pending> pending = runner.pending();
+    assertEquals(pending.size(), 1);
+    assertEquals(pending.get(0).task(), task.name());
+    assertEquals(pending.get(0).answered(), 0);
+    assertTrue(runner.applyAll("copilot-agent").isEmpty(), "nothing answered, nothing applied");
+  }
+
+  @Test
+  public void noProxyHostsBypassTheProxy() {
+    assertTrue(LlmClient.bypass("localhost", null));
+    assertTrue(LlmClient.bypass("llm.corp.example.com", "foo.com, .corp.example.com"));
+    assertTrue(LlmClient.bypass("gateway.internal", "gateway.internal:443"));
+    assertTrue(LlmClient.bypass("any.host", "*"));
+    assertFalse(LlmClient.bypass("models.github.ai", ".corp.example.com"));
+  }
+
+  @Test
   public void unknownTasksAndMissingArgumentsAreRefused() {
     assertThrows(IllegalArgumentException.class, () -> AiTasks.create("approve-everything", Map.of()));
     assertThrows(IllegalArgumentException.class, () -> AiTasks.create("spec-audit", Map.of()));
     assertThrows(IllegalArgumentException.class, () -> AiTasks.create("testcases", Map.of()));
+    assertTrue(AiTasks.NAMES.contains("heal"));
     assertEquals(AiRunner.Mode.of("agent"), AiRunner.Mode.AGENT);
     assertEquals(AiRunner.Mode.of(null), AiRunner.Mode.AUTO);
   }

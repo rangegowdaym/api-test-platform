@@ -19,15 +19,16 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Runs an {@link AiTask} with an LLM API or hands it to the IDE agent.
+ * THE one way every AI job of the platform runs (UI buttons, CLI, after a test run, Copilot prompts).
  *
  * <pre>
- * mode llm    each request -> LlmClient -> task.apply            (needs LLM_PROVIDER + token)
- * mode agent  target/ai/&lt;task&gt;/requests.md + manifest.json        (Copilot agent mode / Claude Code answers)
- *             agent writes target/ai/&lt;task&gt;/answers/&lt;id&gt;.&lt;json|yaml|md&gt;
- *             ai &lt;task&gt; --apply --by copilot-agent -> task.apply per answer
- * mode auto   llm when a token is configured, else agent
+ * auto (default)  an LLM token is configured -> mode llm, else -> mode agent
+ * llm             each request -> LlmClient (GitHub Models, company gateway, Azure OpenAI, Anthropic) -> task.apply
+ * agent           queued for the IDE: target/ai/&lt;task&gt;/requests.md + manifest.json
+ *                 Copilot agent mode (prompt /ai) answers into target/ai/&lt;task&gt;/answers/ and runs
+ *                 "ai apply" -> task.apply per answer (the same validation as llm)
  * </pre>
+ * {@link #pending()} lists queued tasks that are not applied yet (the UI shows them as "Waiting for Copilot").
  */
 public class AiRunner {
 
@@ -41,37 +42,43 @@ public class AiRunner {
   private final Path root;
   private final LlmClient llm;
 
-  public AiRunner() { this(Workspace.ROOT.resolve("target/ai"), new LlmClient(true)); }
+  public AiRunner() { this(Workspace.ROOT.resolve("target/ai"), new LlmClient()); }
 
   public AiRunner(Path root, LlmClient llm) {
     this.root = root;
     this.llm = llm;
   }
 
-  public boolean llmAvailable() { return llm.configured(); }
+  public boolean llmAvailable() { return llm.enabled(); }
+
+  public String llmName() { return llm.enabled() ? llm.model() : "Copilot agent mode (no LLM token)"; }
 
   public Result run(AiTask task, Mode mode) throws Exception {
-    Mode m = mode == Mode.AUTO ? (llm.configured() ? Mode.LLM : Mode.AGENT) : mode;
-    if (m == Mode.LLM && !llm.configured()) {
+    Mode m = mode == Mode.AUTO ? (llm.enabled() ? Mode.LLM : Mode.AGENT) : mode;
+    if (m == Mode.LLM && !llm.enabled()) {
       throw new IllegalStateException("No LLM token for LLM_PROVIDER=" + llm.provider()
-          + ". Configure one (README 'LLM'), or use --mode agent and let Copilot agent mode / Claude Code answer.");
+          + ". Configure one (README 'LLM'), or use --mode agent and let Copilot agent mode answer (/ai).");
     }
     List<AiTask.AiRequest> requests = task.requests();
     if (requests.isEmpty()) {
       return new Result(task.name(), m.name().toLowerCase(Locale.ROOT), 0, 0, List.of("Nothing to do"), List.of(), null, null);
     }
-    return m == Mode.LLM ? viaLlm(task, requests) : export(task, requests);
+    if (m == Mode.LLM) deleteTree(root.resolve(task.name()));   // a fresh LLM answer replaces anything still queued
+    return m == Mode.LLM ? viaLlm(task, requests, mode == Mode.AUTO) : export(task, requests);
   }
 
-  private Result viaLlm(AiTask task, List<AiTask.AiRequest> requests) throws Exception {
+  /** fallback: in auto mode, requests the LLM could not answer (network, quota, outage) are queued for Copilot. */
+  private Result viaLlm(AiTask task, List<AiTask.AiRequest> requests, boolean fallback) throws Exception {
     List<String> messages = new ArrayList<>();
     List<String> rejected = new ArrayList<>();
+    List<AiTask.AiRequest> unanswered = new ArrayList<>();
     int applied = 0;
     for (AiTask.AiRequest r : requests) {
       PromptLibrary.Prompt p = PromptLibrary.load(r.prompt(), r.vars());
       var answer = llm.complete(p.system(), p.user(), task.maxTokens());
       if (answer.isEmpty()) {
-        rejected.add(r.id() + ": no answer from " + llm.model() + " (see the [llm] line above)");
+        if (fallback) unanswered.add(r);
+        else rejected.add(r.id() + ": no answer from " + llm.model() + " (see the [llm] line above)");
         continue;
       }
       try {
@@ -83,6 +90,12 @@ public class AiRunner {
     }
     String fin = applied > 0 ? task.finish() : null;
     if (fin != null) messages.add(fin);
+    if (!unanswered.isEmpty()) {
+      Result queued = export(task, unanswered);
+      messages.add(unanswered.size() + " request(s) got no answer from " + llm.model() + " (see the [llm] line): "
+          + "queued for Copilot instead (" + queued.requestsFile() + ")");
+      if (applied == 0) return queued;
+    }
     return new Result(task.name(), "llm", requests.size(), applied, messages, rejected, null, null);
   }
 
@@ -106,8 +119,7 @@ public class AiRunner {
     } else {
       sb.append("2. Write ONLY the answer (").append(task.format()).append(") to the answer file named in the request.\n");
     }
-    sb.append("3. Then run: `java -jar target/api-test-platform.jar ai ").append(task.name())
-        .append(" --apply --by copilot-agent` (or `--by claude-code`). Fix rejected answers and apply again.\n\n");
+    sb.append("3. Then run: `java -jar target/api-test-platform.jar ai apply`. Fix rejected answers and apply again.\n\n");
     sb.append("Answers are validated exactly like LLM answers; nothing changes until --apply. Never write the\n");
     sb.append("target files yourself, and never mark a test case APPROVED.\n\n");
 
@@ -136,11 +148,45 @@ public class AiRunner {
     Json.write(dir.resolve("manifest.json"), manifest);
 
     String rel = rel(requestsFile);
-    return new Result(task.name(), "agent", requests.size(), 0, List.of(), List.of(), rel,
-        "Agent: answer " + rel + ", then java -jar target/api-test-platform.jar ai " + task.name() + " --apply --by <agent>");
+    return new Result(task.name(), "agent", requests.size(), 0, List.of(), List.of(), rel, AGENT_HINT);
   }
 
   /** Applies the answers the agent wrote for the last export of {@code taskName}. */
+  public static final String AGENT_HINT =
+      "Queued for Copilot: in VS Code Copilot Chat (Agent mode) type /ai   (or set an LLM token to skip this step)";
+
+  /** A queued task that has not been applied yet. */
+  public record Pending(String task, Map<String, String> args, int requests, int answered, String createdAt, String requestsFile) {}
+
+  /** Tasks exported for the IDE agent and not applied yet, oldest first. */
+  public List<Pending> pending() throws IOException {
+    List<Pending> out = new ArrayList<>();
+    if (!Files.isDirectory(root)) return out;
+    try (Stream<Path> dirs = Files.list(root)) {
+      for (Path dir : dirs.filter(Files::isDirectory).sorted().toList()) {
+        Path mf = dir.resolve("manifest.json");
+        if (!Files.exists(mf)) continue;
+        JsonNode m = Json.MAPPER.readTree(mf.toFile());
+        if (m.hasNonNull("appliedAt")) continue;
+        Map<String, String> args = new LinkedHashMap<>();
+        m.path("args").fields().forEachRemaining(e -> args.put(e.getKey(), e.getValue().asText()));
+        int answered = 0;
+        for (JsonNode a : m.path("requests")) if (Files.exists(Workspace.ROOT.resolve(a.asText()))) answered++;
+        out.add(new Pending(m.path("task").asText(dir.getFileName().toString()), args, m.path("requests").size(), answered,
+            m.path("createdAt").asText(), rel(dir.resolve("requests.md"))));
+      }
+    }
+    out.sort(Comparator.comparing(Pending::createdAt));
+    return out;
+  }
+
+  /** Applies every pending task that has answers ("ai apply"). */
+  public List<Result> applyAll(String by) throws Exception {
+    List<Result> out = new ArrayList<>();
+    for (Pending p : pending()) if (p.answered() > 0) out.add(applyAnswers(p.task(), by));
+    return out;
+  }
+
   public Result applyAnswers(String taskName, String by) throws Exception {
     Path dir = root.resolve(taskName);
     Path manifestFile = dir.resolve("manifest.json");
@@ -152,7 +198,7 @@ public class AiRunner {
     Map<String, AiTask.AiRequest> current = new LinkedHashMap<>();
     for (AiTask.AiRequest r : task.requests()) current.put(r.id(), r);
 
-    String label = by == null || by.isBlank() ? "ide-agent" : by.replaceAll("[^A-Za-z0-9_.:-]", "");
+    String label = by == null || by.isBlank() ? "copilot-agent" : by.replaceAll("[^A-Za-z0-9_.:-]", "");
     List<String> messages = new ArrayList<>();
     List<String> rejected = new ArrayList<>();
     int applied = 0;
@@ -180,6 +226,10 @@ public class AiRunner {
     }
     String fin = applied > 0 ? task.finish() : null;
     if (fin != null) messages.add(fin);
+    if (rejected.isEmpty()) {            // fully applied: no longer pending (rejected answers can be fixed and applied again)
+      ((ObjectNode) manifest).put("appliedAt", Instant.now().toString()).put("appliedBy", label);
+      Json.write(manifestFile, manifest);
+    }
     return new Result(taskName, "agent", manifest.path("requests").size(), applied, messages, rejected, null, null);
   }
 
@@ -217,7 +267,7 @@ public class AiRunner {
     StringBuilder sb = new StringBuilder();
     sb.append(r.task()).append(" (").append(r.mode()).append("): ");
     if ("agent".equals(r.mode()) && r.requestsFile() != null) {
-      sb.append(r.requests()).append(" request(s) written to ").append(r.requestsFile()).append('\n').append(r.next()).append('\n');
+      sb.append(r.requests()).append(" request(s) queued in ").append(r.requestsFile()).append('\n').append(r.next()).append('\n');
       return sb.toString();
     }
     sb.append(r.applied()).append(" of ").append(r.requests()).append(" applied\n");

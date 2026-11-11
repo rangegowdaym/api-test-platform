@@ -7,19 +7,20 @@ description: Run the Rest Assured + Cucumber + TestNG API tests for an environme
 
 ## One command (recommended)
 ```bash
-./scripts/run-tests.sh <env> "<tag expression>" [--llm]
+./scripts/run-tests.sh <env> "<tag expression>" [--heal]
 ./scripts/run-tests.sh qa "@smoke"
 ./scripts/run-tests.sh qa "@orders and not @flaky"     # @<tag> = an OpenAPI tag of your spec
-./scripts/run-tests.sh stage "@P1" --llm        # LLM narrative in the RCA (needs GITHUB_TOKEN with models:read)
+./scripts/run-tests.sh stage "@P1" --heal              # AI heals automation/test-data failures, then runs once more
 ```
-It runs `mvn test`, then `post-run` (RCA + report), prints a one-line summary and exits non-zero if any test failed.
+It runs `mvn test`, then `post-run` (AI RCA + report), prints a one-line summary and exits non-zero if any test failed.
+The AI steps use the LLM token when set; otherwise they are queued: answer them with `/ai` (skill `ai-assist`).
 
 ## Pieces, when you need them
 ```bash
 mvn test -Denv=qa -Dcucumber.filter.tags="@TC-createOrder-positive-1"   # one case
 mvn test -Denv=qa -Dthreads=8                                       # more parallel scenarios
 mvn test -Denv=qa -Devidence.all=true                               # evidence for passed tests too
-java -jar target/api-test-platform.jar post-run                     # RCA + report from the last run
+java -jar target/api-test-platform.jar post-run [--heal]            # AI RCA (+ heal) + report from the last run
 ```
 
 ## Before running
@@ -27,8 +28,8 @@ java -jar target/api-test-platform.jar post-run                     # RCA + repo
   every base URI reachable). Network failures found here are ENVIRONMENT issues, not test failures: report the
   doctor's hint instead of running the suite.
 - `config/env/<env>.properties` exists and its `${VARS}` are set in the shell (e.g. `export QA_API_TOKEN=...`).
-- Positive cases with path ids need `testdata.<name>` in that file; otherwise they fail as TEST_DATA (that is correct, not a bug).
-- Features exist: `ls src/test/resources/features/generated/` (else run the `testcases-to-features` skill).
+- "Missing test data: set testdata.X" means the scenario does not create its data yet: that is what `ai heal` fixes.
+- Features exist: `ls src/test/resources/features/generated/` (else `ai automation`, prompt /build-features).
 
 ## Outputs
 | File | Use |
@@ -38,4 +39,4 @@ java -jar target/api-test-platform.jar post-run                     # RCA + repo
 | `target/run-summary.json`, `target/evidence/*.json` | raw results and failure evidence |
 | `history/results.jsonl` | run history for flaky / new-failure detection: commit or cache it |
 
-If there are failures, continue with the `failure-rca` skill or the `rca-analyst` agent.
+If there are failures, answer the queued rca (and heal) with `/ai` (skill `ai-assist`) when no LLM token is set.

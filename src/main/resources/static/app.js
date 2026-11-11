@@ -179,6 +179,7 @@
     $('import-result').textContent = 'Saving the spec; the AI is designing the test cases (this can take a minute)…';
     try {
       const r = await api(path, { method: 'POST', body: fd });
+      queued(r.ai);
       $('import-result').textContent = (r.messages || []).join(' · ') + ((r.rejected || []).length ? ' · rejected: ' + r.rejected.join('; ') : '');
       await Promise.all([loadSummary(), loadList()]);
     } catch (e) { $('import-result').textContent = e.message; }
@@ -197,11 +198,50 @@
     try { return await fn(); } finally { btn.disabled = false; }
   }
 
-  // 1. AI writes features + <Tag>Api + <Tag>Steps for the approved cases (server LLM), else shows the agent command
+  // ---- one AI path: answered by the server's LLM now, or queued for Copilot agent mode (/ai) ----
+  const ai = { status: null, timer: 0, pending: new Set() };
+  function aiResultText(r) {
+    if (r.mode === 'agent') return `Queued for Copilot (${r.requests} request${r.requests === 1 ? '' : 's'}): type /ai in Copilot Chat (Agent mode).`;
+    return `${r.applied} of ${r.requests} applied\n` + r.messages.join('\n') + (r.rejected.length ? '\nrejected:\n' + r.rejected.join('\n') : '');
+  }
+  async function refreshAi() {
+    clearTimeout(ai.timer);
+    try {
+      const st = await api('/ai/options');
+      ai.status = st;
+      $('ai-chip').textContent = st.llmAvailable ? 'AI: ' + st.answeredBy : 'AI: Copilot agent mode';
+      $('ai-chip').classList.toggle('agent', !st.llmAvailable);
+      const now = new Set(st.pending.map((p) => p.task));
+      const done = [...ai.pending].filter((t) => !now.has(t));
+      ai.pending = now;
+      if (done.length) {
+        toast('Copilot finished: ' + done.join(', '));
+        await Promise.all([loadSummary(), loadList()]);
+      }
+      $('ai-queue').classList.toggle('hidden', !st.pending.length);
+      $('aq-text').innerHTML = '<b>Waiting for Copilot</b> &middot; ' + st.pending.map((p) =>
+        `<span class="mono">${esc(p.task)}</span>${p.args.spec ? ' ' + esc(p.args.spec.replace(/^.*\//, '')) : ''}${p.args.tag ? ' @' + esc(p.args.tag) : ''} (${p.answered}/${p.requests} answered)`).join(', ')
+        + ' &middot; in VS Code Copilot Chat (Agent mode) type <b class="mono">/ai</b>';
+      $('aq-apply').disabled = !st.pending.some((p) => p.answered > 0);
+    } catch (e) { /* not signed in yet, or server restarting */ }
+    ai.timer = setTimeout(refreshAi, ai.pending.size ? 4000 : 15000);
+  }
+  async function applyAi() {
+    try {
+      const rs = await busy($('aq-apply'), () => api('/ai/apply', { method: 'POST' }));
+      const rejected = rs.flatMap((r) => r.rejected);
+      toast(rejected.length ? 'Rejected: ' + rejected.join('; ') : `Applied ${rs.length} task(s)`, rejected.length > 0);
+      await Promise.all([loadSummary(), loadList(), refreshAi()]);
+    } catch (e) { toast(e.message, true); }
+  }
+  function queued(r) { if (r && r.mode === 'agent') refreshAi(); return r; }
+
+  // 1. AI writes features + <Tag>Api + <Tag>Steps for the approved cases (LLM now, or queued for Copilot)
   async function features() {
     stepState('features', 'busy', 'AI is writing the automation&hellip;');
     try {
-      const r = await busy($('btn-features'), () => api('/automation/generate', { method: 'POST' }));
+      const r = queued(await busy($('btn-features'), () => api('/automation/generate', { method: 'POST' })));
+      if (r.mode === 'agent') { stepState('features', 'warn', 'Queued for Copilot: type <b>/ai</b> in Copilot Chat'); return; }
       const lines = r.messages.map(esc).join('<br>') + (r.rejected.length ? '<br><span class="error">rejected: ' + r.rejected.map(esc).join('; ') + '</span>' : '');
       stepState('features', r.rejected.length ? 'warn' : 'done', `<b>${r.applied}</b> of ${r.requests} tags written<br>${lines}`);
       toast(r.rejected.length ? 'Some tags were rejected: see step 1' : 'Automation written: review the diff, then Execute tests', r.rejected.length > 0);
@@ -223,9 +263,9 @@
       envSel.innerHTML = envs.map((e) => `<option${e === prev ? ' selected' : ''}>${esc(e)}</option>`).join('');
       if (!envs.length) $('run-error').textContent = 'No config/env/*.properties found.';
       renderTags();
-      $('run-llm-row').classList.toggle('hidden', !run.options.llmAvailable);
       $('run-llm-note').classList.toggle('hidden', !!run.options.llmAvailable);
-      if (!run.options.llmAvailable) $('run-llm').checked = false;
+      $('run-heal').disabled = !run.options.llmAvailable;
+      if (!run.options.llmAvailable) $('run-heal').checked = false;
       const cur = run.options.current;
       if (cur) { run.from = 0; $('run-log').textContent = ''; showRun(cur); if (cur.status === 'RUNNING') poll(); else pollOnce(); }
     } catch (e) { $('run-error').textContent = e.message; }
@@ -251,7 +291,7 @@
   }
   async function startRun() {
     $('run-error').textContent = '';
-    const body = { env: $('run-env').value, tags: $('run-expr').value.trim(), threads: Number($('run-threads').value) || 4, llm: $('run-llm').checked };
+    const body = { env: $('run-env').value, tags: $('run-expr').value.trim(), threads: Number($('run-threads').value) || 4, ai: $('run-ai').checked, heal: $('run-heal').checked && $('run-ai').checked };
     localStorage.setItem('run.env', body.env);
     try {
       const r = await api('/runs', { method: 'POST', body: JSON.stringify(body) });
@@ -280,33 +320,26 @@
     } catch (e) { log.textContent = e.message; $('run-state').textContent = 'check failed'; }
   }
 
-  // ---- AI assist: server LLM when configured, else the commands for Copilot agent mode ----
-  const AI_AGENT_CMD = (task, spec) => `java -jar target/api-test-platform.jar ai ${task}${spec && (task === 'spec-audit' || task === 'testcases') ? ' --spec ' + spec : ''} --mode agent`;
-  let aiOptions = null;
+  // ---- AI assist: every task runs the same way (LLM now, or queued for Copilot) ----
   async function openAi() {
     $('ai-dialog').showModal();
     try {
-      aiOptions = await api('/ai/options');
-      $('ai-spec').innerHTML = (aiOptions.specs || []).map((x) => `<option>${esc(x)}</option>`).join('') || '<option value="">(no spec in specs/)</option>';
-      $('ai-status').innerHTML = aiOptions.llmAvailable
-        ? `Runs on the server with <b>${esc(aiOptions.provider)}</b>. Masked data only; categories and approvals stay with the rules and with you.`
-        : 'No LLM token on this server. Each button shows the command for <b>Copilot agent mode</b> (or Claude Code): the agent answers, then <span class="mono">--apply</span> validates it. See README "LLM".';
+      const st = await api('/ai/options');
+      $('ai-spec').innerHTML = (st.specs || []).map((x) => `<option>${esc(x)}</option>`).join('') || '<option value="">(no spec in specs/)</option>';
+      $('ai-status').innerHTML = st.llmAvailable
+        ? `Answered now by <b>${esc(st.answeredBy)}</b> on the server (masked data only). You still approve every test case.`
+        : 'No LLM token on this server: tasks are <b>queued for Copilot</b>. In VS Code Copilot Chat (Agent mode) type <b class="mono">/ai</b>; results appear here when it is done.';
     } catch (e) { $('ai-status').textContent = e.message; }
   }
   async function runAi(task) {
     const spec = $('ai-spec').value;
     const out = $('ai-out');
-    if (!aiOptions || !aiOptions.llmAvailable) {
-      const cmd = AI_AGENT_CMD(task, spec);
-      out.textContent = `In VS Code, Copilot Chat (Agent mode), ask:\n\n  Run "${cmd}", answer every request in target/ai/${task}/requests.md into its answer file,\n  then run "java -jar target/api-test-platform.jar ai ${task} --apply --by copilot-agent".\n\nOr use the prompt file:  /ai ${task}`;
-      return;
-    }
-    out.textContent = `Running ${task} with ${aiOptions.provider}…`;
+    out.textContent = `Running ${task}…`;
     document.querySelectorAll('[data-ai]').forEach((b) => (b.disabled = true));
     try {
-      const r = await api('/ai/' + task, { method: 'POST', body: JSON.stringify({ spec, context: $('ai-context').value }) });
-      out.textContent = `${r.applied} of ${r.requests} applied\n` + r.messages.join('\n') + (r.rejected.length ? '\nrejected:\n' + r.rejected.join('\n') : '');
-      if (task === 'testcases' && r.applied) { await loadSummary(); await loadList(); toast('Proposed cases added as Pending review'); }
+      const r = queued(await api('/ai/' + task, { method: 'POST', body: JSON.stringify({ spec, context: $('ai-context').value }) }));
+      out.textContent = aiResultText(r);
+      if (task === 'testcases' && r.applied) { await loadSummary(); await loadList(); toast('AI cases added as Pending review'); }
     } catch (e) { out.textContent = e.message; }
     finally { document.querySelectorAll('[data-ai]').forEach((b) => (b.disabled = false)); }
   }
@@ -389,6 +422,9 @@
   $('run-cancel').onclick = cancelRun;
   $('run-doctor').onclick = doctor;
   $('btn-ai').onclick = openAi;
+  $('aq-apply').onclick = applyAi;
+  $('aq-copy').onclick = () => { navigator.clipboard && navigator.clipboard.writeText('/ai'); toast('Copied: paste /ai in Copilot Chat (Agent mode)'); };
+  $('run-ai').addEventListener('change', () => { if (!$('run-ai').checked) $('run-heal').checked = false; });
   $('ai-close').onclick = () => $('ai-dialog').close();
   document.querySelectorAll('[data-ai]').forEach((b) => (b.onclick = () => runAi(b.dataset.ai)));
   $('run-close').onclick = () => { $('run-dialog').close(); };
@@ -425,4 +461,5 @@
   if (deepLink.startsWith('TC-')) { $('f-q').value = deepLink; $('f-status').value = ''; }
   loadSummary().then(loadList).then(() => { if (deepLink.startsWith('TC-') && state.cases.length) open(0); })
     .catch((e) => toast(e.message, true));
+  refreshAi();
 })();
