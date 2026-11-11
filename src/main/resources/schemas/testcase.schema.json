@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qa.local/schemas/testcase.schema.json",
+  "title": "API test case",
+  "type": "object",
+  "required": ["id", "title", "category", "priority", "tags", "status", "version", "source", "request", "expected"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^TC-[A-Za-z0-9_.-]+$" },
+    "title": { "type": "string", "minLength": 5, "maxLength": 300 },
+    "category": { "enum": ["POSITIVE", "MISSING_REQUIRED", "TYPE_MISMATCH", "BOUNDARY", "ENUM", "AUTH", "NOT_FOUND", "CUSTOM"] },
+    "priority": { "enum": ["P1", "P2", "P3"] },
+    "tags": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" } },
+    "status": { "enum": ["PENDING_REVIEW", "APPROVED", "REJECTED", "NEEDS_CHANGES", "OBSOLETE"] },
+    "version": { "type": "integer", "minimum": 1 },
+    "change": { "enum": ["NEW", "CHANGED", "REMOVED", null] },
+    "contentHash": { "type": ["string", "null"] },
+    "source": {
+      "type": "object",
+      "required": ["path", "method", "operationId"],
+      "properties": {
+        "spec": { "type": "string" },
+        "specHash": { "type": "string" },
+        "path": { "type": "string", "pattern": "^/" },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"] },
+        "operationId": { "type": "string" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "pathParams": { "type": "object" },
+        "queryParams": { "type": "object" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "auth": { "type": "string" },
+        "body": {}
+      }
+    },
+    "expected": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "schema": { "type": ["object", "null"] },
+        "assertions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "op"],
+            "properties": {
+              "path": { "type": "string", "pattern": "^\\$" },
+              "op": { "enum": ["equals", "notNull", "contains", "matches", "size"] },
+              "value": {}
+            }
+          }
+        },
+        "maxResponseTimeMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "review": { "type": ["object", "null"] },
+    "notes": { "type": ["array", "null"], "items": { "type": "string" } }
+  }
+}

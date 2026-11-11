@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Case Approval</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">API Test Case Approval</div>
+  <div class="counters" id="counters"></div>
+  <div class="top-actions">
+    <button id="btn-import" class="ghost">Import spec</button>
+    <button id="btn-ai" class="ghost" title="AI tasks: business cases, spec audit, RCA narrative, triage">AI assist</button>
+    <span class="user" id="user"></span>
+  </div>
+</header>
+
+<!-- Pipeline: the same deterministic code as the CLI commands (features, services, mvn test + post-run). -->
+<nav class="pipeline" aria-label="Pipeline">
+  <div class="pstep" id="ps-features">
+    <span class="pnum">1</span>
+    <div class="pbody">
+      <button id="btn-features" class="primary">Generate features</button>
+      <div class="pstatus" id="st-features">Approved cases only &rarr; src/test/resources/features/generated</div>
+    </div>
+  </div>
+  <div class="parrow" aria-hidden="true">&rarr;</div>
+  <div class="pstep" id="ps-services">
+    <span class="pnum">2</span>
+    <div class="pbody">
+      <button id="btn-services">Generate services &amp; steps</button>
+      <div class="pstatus" id="st-services">&lt;Tag&gt;Api + &lt;Tag&gt;Steps for the feature files</div>
+    </div>
+  </div>
+  <div class="parrow" aria-hidden="true">&rarr;</div>
+  <div class="pstep" id="ps-run">
+    <span class="pnum">3</span>
+    <div class="pbody">
+      <button id="btn-run">Execute tests&hellip;</button>
+      <div class="pstatus" id="st-run">Pick environment and tags</div>
+    </div>
+  </div>
+  <div class="parrow" aria-hidden="true">&rarr;</div>
+  <div class="pstep" id="ps-report">
+    <span class="pnum">4</span>
+    <div class="pbody">
+      <a id="btn-report" class="link" href="/reports/index.html#dashboard" target="_blank" rel="noopener">Open report</a>
+      <div class="pstatus" id="st-report">Dashboard, failures and RCA</div>
+    </div>
+  </div>
+</nav>
+
+<main class="layout">
+  <aside class="filters">
+    <label>Search <input id="f-q" placeholder="id, title, path"></label>
+    <label>Status
+      <select id="f-status">
+        <option value="">All</option>
+        <option value="PENDING_REVIEW" selected>Pending review</option>
+        <option value="APPROVED">Approved</option>
+        <option value="NEEDS_CHANGES">Needs changes</option>
+        <option value="REJECTED">Rejected</option>
+        <option value="OBSOLETE">Obsolete</option>
+      </select>
+    </label>
+    <label>Tag <select id="f-tag"><option value="">All</option></select></label>
+    <label>Category
+      <select id="f-category">
+        <option value="">All</option>
+        <option>POSITIVE</option><option>MISSING_REQUIRED</option><option>TYPE_MISMATCH</option>
+        <option>BOUNDARY</option><option>ENUM</option><option>AUTH</option><option>NOT_FOUND</option><option>CUSTOM</option>
+      </select>
+    </label>
+    <label>Priority
+      <select id="f-priority"><option value="">All</option><option>P1</option><option>P2</option><option>P3</option></select>
+    </label>
+    <div class="hint">
+      <b>Keys</b>: J/K next/previous, A approve, R reject, C request changes, Esc close
+    </div>
+  </aside>
+
+  <section class="list">
+    <div class="bulk">
+      <label><input type="checkbox" id="check-all"> Select all</label>
+      <button id="bulk-approve" class="primary small" disabled>Approve selected</button>
+      <button id="bulk-reject" class="danger small" disabled>Reject selected</button>
+      <span id="list-count" class="muted"></span>
+    </div>
+    <table class="cases">
+      <thead><tr><th></th><th>Test case</th><th>Endpoint</th><th>Category</th><th>Pri</th><th>Expect</th><th>Status</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="detail hidden" id="detail">
+    <div class="detail-head">
+      <div>
+        <div class="muted mono" id="d-id"></div>
+        <h2 id="d-title"></h2>
+        <div id="d-badges"></div>
+      </div>
+      <button class="ghost" id="d-close" title="Close (Esc)">Close</button>
+    </div>
+    <div id="d-notes"></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="overview">Overview</button>
+      <button class="tab" data-tab="gherkin">Scenario</button>
+      <button class="tab" data-tab="json">Edit JSON</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+    <div class="tab-body" id="tab-overview">
+      <h3>Request</h3><pre id="d-request"></pre>
+      <h3>Expected</h3><pre id="d-expected"></pre>
+    </div>
+    <div class="tab-body hidden" id="tab-gherkin"><pre id="d-gherkin"></pre></div>
+    <div class="tab-body hidden" id="tab-json">
+      <textarea id="d-json" spellcheck="false"></textarea>
+      <input id="d-edit-comment" placeholder="What did you change and why?">
+      <button class="primary" id="d-save">Save edit (goes back to review)</button>
+      <div id="d-json-error" class="error"></div>
+    </div>
+    <div class="tab-body hidden" id="tab-history"><ul id="d-history" class="history"></ul></div>
+    <div class="actions">
+      <input id="d-comment" placeholder="Comment (required to reject)">
+      <button class="primary" id="d-approve">Approve (A)</button>
+      <button class="warn" id="d-changes">Request changes (C)</button>
+      <button class="danger" id="d-reject">Reject (R)</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="import-dialog">
+  <form method="dialog" id="import-form">
+    <h2>Import a spec or API doc</h2>
+    <p class="muted">Swagger 2 / OpenAPI 3 (YAML or JSON), Postman collection, or Markdown/HTML API doc.
+      Existing approvals are kept for cases that did not change.</p>
+    <label>File <input type="file" id="import-file" accept=".yaml,.yml,.json,.md,.markdown,.html,.htm"></label>
+    <label>or URL <input type="url" id="import-url" placeholder="https://service/v3/api-docs"></label>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost">Cancel</button>
+      <button id="import-go" value="default" class="primary">Import</button>
+    </div>
+    <div id="import-result" class="muted"></div>
+  </form>
+</dialog>
+
+<dialog id="run-dialog" class="wide">
+  <div class="run-grid">
+    <form id="run-form" class="run-form" method="dialog">
+      <h2>Execute tests</h2>
+      <p class="muted">Runs <span class="mono">mvn test</span> in the project folder, then the RCA, and adds it to the report.
+        Credentials come from the environment variables of the server, never from this page.</p>
+      <div class="env-row">
+        <label>Environment <select id="run-env"></select></label>
+        <button type="button" class="ghost" id="run-doctor" title="Config, secrets set, proxy, company CA, reachability">Check environment</button>
+      </div>
+      <div class="field">
+        <div class="field-h"><span>Tags</span><span class="muted" id="run-tag-count"></span>
+          <span class="grow"></span>
+          <label class="inline"><input type="radio" name="run-join" value="or" checked> any of</label>
+          <label class="inline"><input type="radio" name="run-join" value="and"> all of</label>
+        </div>
+        <input id="run-tag-filter" placeholder="Filter tags">
+        <div class="tag-list" id="run-tags"></div>
+        <label class="inline"><input type="checkbox" id="run-no-wip" checked> exclude <span class="mono">@wip</span></label>
+      </div>
+      <label>Tag expression (sent to Cucumber)
+        <input id="run-expr" class="mono" placeholder="(all scenarios)" maxlength="500">
+      </label>
+      <div class="row2">
+        <label>Threads <input id="run-threads" type="number" min="1" max="16" value="4"></label>
+        <label class="inline llm hidden" id="run-llm-row"><input type="checkbox" id="run-llm"> LLM narrative for the RCA</label>
+        <span class="llm-note hidden" id="run-llm-note">RCA narrative: rule-based. For an AI narrative without a token, run <b>/rca</b> in Copilot agent mode after the run.</span>
+      </div>
+      <div class="error" id="run-error"></div>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" id="run-close">Close</button>
+        <button type="button" class="danger hidden" id="run-cancel">Cancel run</button>
+        <button type="button" class="primary" id="run-go">Run tests</button>
+      </div>
+    </form>
+    <section class="run-out">
+      <div class="run-head">
+        <span class="badge" id="run-state">idle</span>
+        <span class="muted" id="run-meta"></span>
+        <span class="grow"></span>
+        <a class="link small hidden" id="run-report" href="/reports/index.html#dashboard" target="_blank" rel="noopener">Open report</a>
+      </div>
+      <pre class="run-log" id="run-log">No run yet.</pre>
+      <div class="run-summary" id="run-summary"></div>
+    </section>
+  </div>
+</dialog>
+
+<dialog id="ai-dialog">
+  <form method="dialog" class="ai-form">
+    <h2>AI assist</h2>
+    <p class="muted" id="ai-status">Checking the LLM configuration&hellip;</p>
+    <label>Spec <select id="ai-spec"></select></label>
+    <label>Business context for new cases (optional)
+      <textarea id="ai-context" rows="3" maxlength="4000" placeholder="e.g. orders over 10,000 need approval; a cancelled order cannot be changed"></textarea>
+    </label>
+    <div class="ai-actions">
+      <button type="button" data-ai="testcase-augment" class="primary">Propose business cases</button>
+      <button type="button" data-ai="spec-audit">Audit spec</button>
+      <button type="button" data-ai="rca-narrative">Rewrite RCA narrative</button>
+      <button type="button" data-ai="triage-summary">Triage summary</button>
+    </div>
+    <pre class="ai-out mono" id="ai-out">Proposed cases arrive as Pending review: you still approve every one.</pre>
+    <div class="dialog-actions"><button type="button" class="ghost" id="ai-close">Close</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# Approval UI + API.  Start:  java -jar target/api-test-platform.jar serve
+server:
+  port: ${PORT:8080}
+  # 127.0.0.1 = only this machine can open the UI (it can start test runs). Share it on the company network
+  # with BIND_ADDRESS=0.0.0.0, and then real PLATFORM_USERS passwords are required.
+  address: ${BIND_ADDRESS:127.0.0.1}
+
+platform:
+  # name:password:ROLE, comma separated. ROLE = REVIEWER (can approve/edit) or VIEWER (read only).
+  # Set PLATFORM_USERS in the environment; the default is for a local first run ONLY.
+  users: ${PLATFORM_USERS:admin:admin:REVIEWER}
+  report-url: ${REPORT_URL:/reports/index.html}
+  # Maven used by the "Execute tests" button. Empty = ./mvnw if present, else mvn (mvn.cmd on Windows).
+  mvn: ${PLATFORM_MVN:}
+  # Extra Maven arguments for that button, e.g. "-s config/maven/settings.xml" for the company repository.
+  # (Maven 3.9+ also reads MAVEN_ARGS and .mvn/maven.config by itself.)
+  mvn-args: ${PLATFORM_MVN_ARGS:}
+
+spring:
+  application:
+    name: api-test-platform
+  datasource:
+    # audit trail of reviews. Local: H2 file. Shared/production: set DB_URL=jdbc:postgresql://host:5432/apitest
+    url: ${DB_URL:jdbc:h2:file:./target/platform/approval-db;AUTO_SERVER=TRUE}
+    username: ${DB_USER:sa}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

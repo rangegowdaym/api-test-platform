@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings for a company network: every download goes through your internal repository manager
+  (Nexus / Artifactory / Azure Artifacts / GitHub Packages proxy of Maven Central), with an optional proxy.
+
+  Use it in one of these ways:
+    1. copy to ~/.m2/settings.xml                         (all Maven builds on this machine)
+    2. mvn -s config/maven/settings-company.xml ...       (this project only)
+    3. export MAVEN_ARGS="-s config/maven/settings-company.xml"      (Maven 3.9+: mvn, scripts and the UI button)
+       or PLATFORM_MVN_ARGS="-s config/maven/settings-company.xml"  (only the UI's Execute button, any Maven)
+
+  Values come from environment variables, so nothing secret is committed:
+    export MAVEN_REPO_URL=https://nexus.company.com/repository/maven-public/
+    export MAVEN_REPO_USER=... MAVEN_REPO_PASSWORD=...        (token, if your repository needs a login)
+  If your company already gives you a settings.xml, use that instead and ignore this file.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+
+  <mirrors>
+    <mirror>
+      <id>company</id>
+      <name>Company repository manager</name>
+      <url>${env.MAVEN_REPO_URL}</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+
+  <servers>
+    <server>
+      <id>company</id>
+      <username>${env.MAVEN_REPO_USER}</username>
+      <password>${env.MAVEN_REPO_PASSWORD}</password>
+    </server>
+  </servers>
+
+  <!-- Only if Maven must go through an HTTP proxy to reach the repository (often not needed for an internal one). -->
+  <!--
+  <proxies>
+    <proxy>
+      <id>company-proxy</id>
+      <active>true</active>
+      <protocol>https</protocol>
+      <host>proxy.company.com</host>
+      <port>8080</port>
+      <username>${env.PROXY_USER}</username>
+      <password>${env.PROXY_PASSWORD}</password>
+      <nonProxyHosts>localhost|127.0.0.1|*.company.com</nonProxyHosts>
+    </proxy>
+  </proxies>
+  -->
+</settings>

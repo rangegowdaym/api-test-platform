@@ -1,0 +1,12 @@
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+<!-- data-provider-thread-count = parallel scenarios; override with -Dthreads=N (see pom.xml) -->
+<suite name="API tests" data-provider-thread-count="4" verbose="1">
+  <listeners>
+    <listener class-name="com.qa.automation.support.NetworkRetry"/>
+  </listeners>
+  <test name="Cucumber API scenarios">
+    <classes>
+      <class name="com.qa.automation.runners.ApiTestRunner"/>
+    </classes>
+  </test>
+</suite>

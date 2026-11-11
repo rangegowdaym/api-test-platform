@@ -1,0 +1,22 @@
+target/
+reports/*
+!reports/.gitkeep
+testcases/_proposed/
+.idea/
+*.iml
+.vscode/
+.env
+*.log
+.DS_Store
+
+# company certificates and local env files (see config/certs/README.md)
+config/certs/*.p12
+config/certs/*.jks
+config/certs/*.pem
+config/certs/*.crt
+config/certs/*.key
+config/env/*.local.properties
+
+.github/workflows/
+docker-compose.yml
+Dockerfile

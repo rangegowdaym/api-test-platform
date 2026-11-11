@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  api-test-platform: ONE Maven module that contains
+    * the platform  (src/main): spec ingest -> JSON test cases -> approval UI -> feature files -> RCA -> report
+    * the automation (src/test): Rest Assured + Cucumber + TestNG runner, steps, hooks, evidence capture
+
+  Common commands (see README.md for the full list):
+    mvn -DskipTests package                                   build the runnable jar
+    java -jar target/api-test-platform.jar serve              approval UI on http://localhost:8080
+    See README.md for spec generation commands.
+    java -jar target/api-test-platform.jar features
+    mvn test -Denv=qa -Dcucumber.filter.tags="@smoke"         run the automated API tests
+    java -jar target/api-test-platform.jar rca && java -jar target/api-test-platform.jar report
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.5</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.qa</groupId>
+  <artifactId>api-test-platform</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <name>api-test-platform</name>
+  <description>Swagger to approved Cucumber API tests with automated RCA reporting</description>
+
+  <properties>
+    <java.version>17</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <swagger-parser.version>2.1.22</swagger-parser.version>
+    <cucumber.version>7.18.1</cucumber.version>
+    <testng.version>7.10.2</testng.version>
+    <datafaker.version>2.3.1</datafaker.version>
+    <picocli.version>4.7.6</picocli.version>
+    <jsoup.version>1.17.2</jsoup.version>
+    <flexmark.version>0.64.8</flexmark.version>
+
+    <!-- runtime switches for the test run -->
+    <env>qa</env>
+    <cucumber.filter.tags>not @wip</cucumber.filter.tags>
+    <threads>4</threads>
+    <!-- keep going after test failures so RCA + report still run (scripts/run-tests.sh reads the result) -->
+    <maven.test.failure.ignore>true</maven.test.failure.ignore>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.cucumber</groupId>
+        <artifactId>cucumber-bom</artifactId>
+        <version>${cucumber.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- ===== platform: approval UI + REST API ===== -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ===== platform: spec ingest + generation ===== -->
+    <dependency>
+      <groupId>io.swagger.parser.v3</groupId>
+      <artifactId>swagger-parser</artifactId>
+      <version>${swagger-parser.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>net.datafaker</groupId>
+      <artifactId>datafaker</artifactId>
+      <version>${datafaker.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
+      <version>${picocli.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>${jsoup.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.vladsch.flexmark</groupId>
+      <artifactId>flexmark-all</artifactId>
+      <version>${flexmark.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.networknt</groupId>
+      <artifactId>json-schema-validator</artifactId>
+      <version>1.4.0</version>
+    </dependency>
+
+    <!-- ===== automation (test scope) ===== -->
+    <dependency>
+      <groupId>io.rest-assured</groupId>
+      <artifactId>rest-assured</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.rest-assured</groupId>
+      <artifactId>json-schema-validator</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.cucumber</groupId>
+      <artifactId>cucumber-java</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.cucumber</groupId>
+      <artifactId>cucumber-testng</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.cucumber</groupId>
+      <artifactId>cucumber-picocontainer</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testng</groupId>
+      <artifactId>testng</artifactId>
+      <version>${testng.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.wiremock</groupId>
+      <artifactId>wiremock-standalone</artifactId>
+      <version>3.9.1</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- unit tests of the platform itself -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+      <!-- every test in this project is TestNG; keep JUnit off the classpath so surefire uses one provider -->
+      <exclusions>
+        <exclusion>
+          <groupId>org.junit.jupiter</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.junit.platform</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>api-test-platform</finalName>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- prompts/ is edited at the repo root (versioned with the code) and also bundled into the jar -->
+      <resource>
+        <directory>prompts</directory>
+        <targetPath>prompts</targetPath>
+      </resource>
+    </resources>
+    <plugins>
+      <!-- one runnable jar; Main dispatches to the CLI or to the Spring Boot UI -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <mainClass>com.qa.platform.Main</mainClass>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <suiteXmlFiles>
+            <suiteXmlFile>src/test/resources/testng.xml</suiteXmlFile>
+          </suiteXmlFiles>
+          <systemPropertyVariables>
+            <env>${env}</env>
+            <cucumber.filter.tags>${cucumber.filter.tags}</cucumber.filter.tags>
+            <dataproviderthreadcount>${threads}</dataproviderthreadcount>
+          </systemPropertyVariables>
+          <properties>
+            <property>
+              <name>dataproviderthreadcount</name>
+              <value>${threads}</value>
+            </property>
+          </properties>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!-- platform unit tests only (no API calls): mvn test -Punit -->
+    <profile>
+      <id>unit</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <suiteXmlFiles combine.self="override"/>
+              <includes>
+                <include>com/qa/platform/**/*Test.java</include>
+              </includes>
+              <testFailureIgnore>false</testFailureIgnore>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
