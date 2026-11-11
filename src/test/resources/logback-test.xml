@@ -3,6 +3,5 @@
     <encoder><pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{24} - %msg%n</pattern></encoder>
   </appender>
   <logger name="org.apache.http" level="WARN"/>
-  <logger name="io.swagger" level="WARN"/>
   <root level="INFO"><appender-ref ref="STDOUT"/></root>
 </configuration>

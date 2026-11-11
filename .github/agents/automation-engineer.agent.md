@@ -14,14 +14,14 @@ Everything API-specific lives in the JSON test case or in `config/env/*.properti
 2. Respect the layering Steps → Services → Api → ApiClient (`.github/instructions/automation.instructions.md`).
    Make the change in the right place:
    - new step wording → `steps/ApiSteps.java`, written generically (parameters, not hard-coded fields).
-     Per-operation `When` steps are generated into `steps/generated/` by the `services` command; change
-     `codegen/StepGenerator.java` (and its unit test) if their shape must change, never the generated files
+     Per-tag features, `<Tag>Api` and `<Tag>Steps` are written by the AI (`ai automation`, feature-author agent);
+     fix them there. Your job is the framework they build on (its source is part of prompts/automation.md)
    - new auth scheme → a class in `client/auth/` implementing `AuthProvider`, wired in `AuthProviders`, plus a commented example in `config/env/qa.properties`
    - HTTP behaviour (timeouts, encoding, logging, capture) → `client/ApiClient.java` only
-   - typed calls or test-data setup for a domain → `services/` + `models/` (skill `add-api-service`); endpoint classes are regenerated with the `services` command
+   - typed calls or test-data setup for a domain → `services/` + `models/` (skill `add-api-service`); endpoint classes per tag are written by `ai automation`
    - new assertion → `assertions/ResponseAssert.java`, then use it from a step
    - new assertion op for JSON cases → `ResponseAssert.hasField()` **and** the `op` enum in `testcase.schema.json`
-   - anything that adds evidence → `hooks/Hooks.java` + the `Evidence` record (keep RCA rules working)
+   - anything that adds evidence → `hooks/Hooks.java` + the `Evidence` record (the AI RCA reads it)
 3. Parallel safety: state lives in `ScenarioContext` (one per scenario). No static mutable state except
    caches like `AuthProviders` and `SchemaValidator`.
 4. Secrets: route anything you log or save through `Masking`.
@@ -32,4 +32,4 @@ Everything API-specific lives in the JSON test case or in `config/env/*.properti
 
 - Do not weaken an assertion, widen a timeout or add a retry to hide a real failure.
 - Retries are only for network errors (`NetworkRetry`); never for assertion failures.
-- Keep `FeatureWriter` and the step texts in sync: if you rename a step, update the writer and regenerate.
+- Change generated code only by re-running `ai automation --tag <tag>` (the guard blocks direct edits).

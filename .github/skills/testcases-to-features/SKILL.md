@@ -1,39 +1,34 @@
 ---
 name: testcases-to-features
-description: Generate Cucumber feature files from human-APPROVED JSON test cases and verify they bind to step definitions. Use after review in the approval UI, or when someone asks to "convert approved test cases to feature files".
+description: Turn APPROVED test cases into runnable automation (feature files, <Tag>Api, <Tag>Steps with assertions) using the AI automation task. Use after a review in the approval UI, when features are missing or outdated, or when the dry run fails.
 ---
 
-# Approved cases → feature files
+# Approved cases → automation (the AI writes it, testers review it)
 
 ```bash
-java -jar target/api-test-platform.jar status          # how many are APPROVED?
-java -jar target/api-test-platform.jar features        # writes src/test/resources/features/generated/<tag>.feature
-java -jar target/api-test-platform.jar services --spec specs/<spec>   # <Tag>Api + <Tag>Steps for the When-steps
-mvn -q test -Dcucumber.execution.dry-run=true          # every step must bind
+java -jar target/api-test-platform.jar status                       # how many APPROVED cases per tag
+java -jar target/api-test-platform.jar ai automation --mode agent   # [--tag orders]; with an LLM token: --mode llm
+#   answer target/ai/automation/requests.md: per tag, write into the answer folder
+#     src/test/resources/features/generated/<tag>.feature
+#     src/test/java/com/qa/automation/api/generated/<Tag>Api.java
+#     src/test/java/com/qa/automation/steps/generated/<Tag>Steps.java
+java -jar target/api-test-platform.jar ai automation --apply --by copilot-agent
+mvn -q test -Dcucumber.execution.dry-run=true                       # compiles, every step binds
 ```
 
-## What a generated scenario looks like
-```gherkin
-@TC-createOrder-missing-required-body_customerId @orders @P2 @regression @missing-required
-Scenario: POST /orders without required field 'customerId' returns 400
-  Given test case "TC-createOrder-missing-required-body_customerId"
-  And I am authenticated as "default"
-  # POST /orders
-  When I call the orders operation "createOrder"
-  Then the response status should be 400
-  And the response should match the documented schema
-  And the response time should be under 3000 ms
-```
-The scenario is thin on purpose: request data and expectations are loaded from the approved JSON by id,
-so an edit in the UI only needs a regeneration if the case's status changes. The When-step is defined by the
-generated `steps/generated/OrdersSteps#createOrder`, which calls `OrdersApi#createOrder` (both from `services`).
-In the approval UI the same two commands are the buttons **1 Generate features** and **2 Generate services & steps**;
-button 1 lists operations whose step definition is still missing.
+In the approval UI the same is button **1 Generate automation (AI)** (needs an LLM token on the server).
 
-## Rules
-- Only APPROVED cases are written; PENDING/REJECTED/OBSOLETE are skipped.
-- Generated files start with `# GENERATED` and are replaced on each run. Never edit them (a hook blocks it).
-- Hand-written scenarios go in `src/test/resources/features/manual/` and may use the same steps plus
-  `I set body field "$.x" to "y"`, `I save "$.id" as "orderId"`, `the response field "$.x" should equal "y"`.
-- An undefined `When I call the <tag> operation "<id>"` step → run `services --spec` for that spec (its spec file
-  must be in `specs/`). Any other undefined step → use the `add-step-definition` skill.
+## What the AI decides
+- Scenarios and wording, one per approved case, tagged `@<caseId>`, `@<tag>`, `@api`.
+- Assertions: status, schema, the fields and rules from the spec and the case (never weaker than the case).
+- The endpoint class and the step definitions, built on the framework (`BaseApi`, `ServiceFactory`,
+  `OperationService.prepare`, `ResponseAssert`, `ApiSteps`; their source is in the request).
+
+## What `--apply` checks
+Fixed paths per tag, Java package = folder, every `@TC-` tag is an APPROVED case of that tag, no forbidden calls
+(Rest Assured outside ApiClient, sleeps, process/file/network access). Then a header marks the file AI-GENERATED.
+
+## Dry run fails
+- Duplicate step text: a Steps class redefined an `ApiSteps` step → reuse the existing one.
+- Compile error: fix the file in the answer folder, apply again (never edit around the validation).
+- A framework gap (missing helper): `automation-engineer` agent.

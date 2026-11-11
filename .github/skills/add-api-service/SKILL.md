@@ -7,7 +7,7 @@ description: Add or update the service layer for an API (generated <Tag>Api endp
 
 ## 1. Generate the endpoint classes from the spec
 ```bash
-java -jar target/api-test-platform.jar services --spec specs/<service>.yaml   # <Tag>Api + <Tag>Steps
+java -jar target/api-test-platform.jar ai automation --tag <tag>   # AI writes <Tag>Api + <Tag>Steps
 ls src/test/java/com/qa/automation/api/generated/      # one <Tag>Api.java per OpenAPI tag
 ```
 Each operation becomes `ApiResponse <operationId>(pathParams..., body?, query?)` plus an overload with a

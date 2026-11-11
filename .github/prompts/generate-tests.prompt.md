@@ -1,10 +1,7 @@
 ---
-description: Audit a spec or API doc, then generate JSON test cases for human review
-agent: spec-analyst
-argument-hint: "spec path or URL, e.g. specs/orders.yaml"
+description: Audit a spec and let the AI design all its test cases for human review
+agent: test-designer
 ---
-Audit `${input:spec:specs/your-service.yaml}` for testability and write `target/platform/spec-audit.md`.
-Follow the `swagger-to-testcases` skill for the commands.
-
-When the verdict is not NOT READY, use the **Design test cases** handoff (or switch to the `test-designer` agent)
-to generate the cases and propose business cases. Never approve anything.
+For `${input:spec:specs/your-api.yaml}`: first follow the `spec-analyst` steps (ai spec-audit), then the
+`swagger-to-testcases` skill (ai testcases, with business context `${input:context:none}`). Reply with the audit
+verdict, counts per category and tag, the assumptions to check, and the review link http://localhost:8080.

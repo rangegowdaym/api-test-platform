@@ -2,7 +2,6 @@ package com.qa.platform.approval;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.qa.platform.common.Workspace;
-import com.qa.platform.generate.CaseGenerator;
 import com.qa.platform.model.TestCase;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -84,26 +83,38 @@ public class ApprovalController {
     return service.bulk(r.ids(), r.action(), p.getName(), r.comment());
   }
 
-  /** Upload a spec/doc file, or pass ?url=... . Regenerates cases and merges them with the stored ones. */
+  /**
+   * Upload a spec or API doc (OpenAPI/Swagger YAML/JSON, Postman, Markdown...) or pass ?url=...; it is saved in specs/
+   * and the AI designs the test cases (PENDING_REVIEW). Optional business context for the AI.
+   */
   @PostMapping(value = "/imports", consumes = {MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.ALL_VALUE})
   public Map<String, Object> importSpec(@RequestPart(name = "file", required = false) MultipartFile file,
                                         @RequestParam(required = false) String url,
-                                        @RequestParam(required = false) Set<String> categories,
+                                        @RequestParam(required = false) String context,
                                         Principal p) throws Exception {
-    String input;
+    Path target;
     if (file != null && !file.isEmpty()) {
       String name = Path.of(file.getOriginalFilename() == null ? "upload.yaml" : file.getOriginalFilename()).getFileName().toString();
-      Path target = Workspace.SPECS.resolve(name);
+      target = Workspace.SPECS.resolve(name.replaceAll("[^A-Za-z0-9_.-]", "_"));
       Files.createDirectories(target.getParent());
       file.transferTo(target);
-      input = target.toString();
     } else if (url != null && url.startsWith("http")) {
-      input = url;
+      String name = url.replaceAll("[?#].*$", "").replaceAll(".*/", "");
+      target = Workspace.SPECS.resolve((name.isBlank() ? "spec.yaml" : name).replaceAll("[^A-Za-z0-9_.-]", "_"));
+      var resp = java.net.http.HttpClient.newBuilder().followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build()
+          .send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(url)).GET().build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+      if (resp.statusCode() / 100 != 2) throw new IllegalArgumentException("Download failed: HTTP " + resp.statusCode());
+      Files.createDirectories(target.getParent());
+      Files.writeString(target, resp.body());
     } else {
       throw new IllegalArgumentException("Send a file or ?url=");
     }
-    return service.importSpec(input, p.getName(),
-        new CaseGenerator.Options(Set.of(), Set.of(), categories == null ? Set.of() : categories));
+    return service.importSpec(target, p.getName(), context);
+  }
+
+  @ExceptionHandler(IllegalStateException.class)
+  public ResponseEntity<Map<String, String>> conflict(RuntimeException e) {
+    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", String.valueOf(e.getMessage())));
   }
 
   @ExceptionHandler(ApprovalService.NotFound.class)

@@ -51,12 +51,12 @@
   const logGroup = (cat) => (cat === 'pw:api' ? 'action' : cat === 'expect' ? 'expect' : cat === 'hook' || cat === 'fixture' ? 'hook' : 'step');
   const SOURCES = DATA.sources || {};
 
-  // ---------- RCA data (rules-based category; LLM may only rewrite the narrative) ----------
+  // ---------- RCA data (decided by the AI: category, owner, grouping; reviewed by testers) ----------
   const RCA = DATA.rca && Array.isArray(DATA.rca.entries) ? DATA.rca : null;
   const RCA_ENTRIES = RCA ? RCA.entries : [];
   const RCA_BY_CASE = new Map();
   RCA_ENTRIES.forEach((r) => [r.caseId, ...(r.relatedCaseIds || [])].forEach((id) => { if (id && !RCA_BY_CASE.has(id)) RCA_BY_CASE.set(id, r); }));
-  const RCA_TONE = { FUNCTIONAL_BUG: 'failed', SERVER_ERROR: 'failed', CONTRACT_DRIFT: 'broken', PERFORMANCE: 'broken', ENVIRONMENT: 'skipped', AUTH_CONFIG: 'flaky', TEST_DATA: 'flaky', TEST_DEFECT: 'flaky', FLAKY: 'flaky' };
+  const RCA_TONE = { FUNCTIONAL_BUG: 'failed', SERVER_ERROR: 'failed', CONTRACT_DRIFT: 'broken', PERFORMANCE: 'broken', ENVIRONMENT: 'skipped', AUTH_CONFIG: 'flaky', TEST_DATA: 'flaky', TEST_DEFECT: 'flaky', FLAKY: 'flaky', UNCLASSIFIED: 'skipped' };
   const RCA_HINT = {
     FUNCTIONAL_BUG: 'The API answered, but not as the approved test case expects.',
     SERVER_ERROR: 'The API returned a 5xx error.',
@@ -67,6 +67,7 @@
     TEST_DATA: 'The test data the case depends on is missing or stale.',
     TEST_DEFECT: 'The test itself is wrong (step, placeholder or expectation).',
     FLAKY: 'The case passes and fails on the same code.',
+    UNCLASSIFIED: 'Not analysed by the AI yet: run /rca in Copilot agent mode, or post-run --llm.',
   };
   // Generated scenarios carry their test-case id as a tag, e.g. @TC-orders-createOrder-positive.
   const caseIdOf = (t) => { const tag = (t.tags || []).find((x) => /^@?TC-/.test(x)); return tag ? tag.replace(/^@/, '') : null; };
@@ -601,7 +602,7 @@
   const rcaChip = (r) => html`<span class="chip-rca rca-${rcaTone(r)}" data-tip="${RCA_HINT[r.category] || ''}">${rcaLabel(r.category)}</span>`;
   function confMeter(r) {
     const v = Math.round((Number(r.confidence) || 0) * 100);
-    return html`<span class="conf" data-tip="Rule confidence ${v}%${r.analysedBy ? ' · ' + r.analysedBy : ''}"><span class="conf-track"><i style="width:${v}%"></i></span><b>${v}%</b></span>`;
+    return html`<span class="conf" data-tip="Confidence ${v}%${r.analysedBy ? ' · ' + r.analysedBy : ''}"><span class="conf-track"><i style="width:${v}%"></i></span><b>${v}%</b></span>`;
   }
   function rcaHistory(r) {
     const h = (r.history || []).slice(-10);
@@ -691,7 +692,7 @@
       ${r.curl ? html`<div class="sub-h">${icon('terminal')}Reproduce<span class="grow"></span><button type="button" class="link" data-action="copy" data-kind="rca-curl" data-case="${r.caseId}">${icon('copy')}Copy</button></div><pre class="code rca-curl">${r.curl}</pre>` : ''}
       ${r.bugTicket ? html`<details class="stack rca-ticket"><summary>${icon('chevron', 'caret')}Bug ticket draft<span class="grow"></span><button type="button" class="link" data-action="copy" data-kind="rca-ticket" data-case="${r.caseId}">${icon('copy')}Copy</button></summary><pre class="code">${r.bugTicket}</pre></details>` : ''}
       <div class="rca-actions">${rcaActions(r, false)}</div>
-      <p class="note">Category, confidence and owner come from deterministic rules${r.analysedBy && /llm|model/i.test(r.analysedBy) ? '; the summary text was rewritten by ' + r.analysedBy : ''}. Never change an assertion to make a failure pass: fix the API, the data or the configuration.</p>`;
+      <p class="note">${r.analysedBy && r.analysedBy.startsWith('ai:') ? 'Category, owner, grouping and text decided by ' + r.analysedBy.slice(3) + '. Review before you act on it.' : 'Not analysed yet.'} Never change an assertion just to make a failure pass: fix the API, the data or the configuration.</p>`;
   }
   function rcaCallout(t) {
     const r = rcaOf(t);
@@ -896,7 +897,7 @@
     if (!a || !a.prompt) return '';
     return html`<section class="prompt-card">
       <div class="prompt-head"><span class="prompt-ic">${icon('sparkle')}</span>
-        <div class="row-main"><b>Fix with AI</b><div class="prompt-sub">A ready-made prompt with the error, test source, executed steps and the rule-based RCA. Paste it into Copilot Chat or any AI assistant.</div></div>
+        <div class="row-main"><b>Fix with AI</b><div class="prompt-sub">A ready-made prompt with the error, test source, executed steps and the RCA. Paste it into Copilot Chat or any AI assistant.</div></div>
         <button type="button" class="btn btn-primary" data-action="copy" data-kind="prompt">${icon('copy')}Copy prompt</button></div>
       <details class="prompt-preview"><summary>${icon('chevron', 'caret')}Preview prompt<span class="muted">${fmtBytes(a.prompt.length)}</span></summary><pre class="code">${a.prompt}</pre></details>
     </section>`;
@@ -1252,7 +1253,7 @@
       case 'stack': return a && a.errors[i] ? a.errors[i].stack || '' : '';
       case 'stdout': return a ? a.stdout : '';
       case 'stderr': return a ? a.stderr : '';
-      case 'prompt': return a ? (a.prompt || '') + (rcaOf(t) ? '\n\n# Rule-based RCA (category is authoritative)\n\n' + rcaText(rcaOf(t)) : '') : '';
+      case 'prompt': return a ? (a.prompt || '') + (rcaOf(t) ? '\n\n# RCA so far\n\n' + rcaText(rcaOf(t)) : '') : '';
       case 'log': return a ? logText(a) : '';
       case 'attachment': return a && a.attachments[i] ? a.attachments[i].content || '' : '';
       case 'trace': return traceCmd(DATA.outputFolder + '/' + d.src);

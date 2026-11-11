@@ -2,6 +2,7 @@ package com.qa.platform.approval;
 
 import java.security.Principal;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,8 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Pipeline buttons of the approval UI. POST endpoints need the REVIEWER role (AppConfig); GET works for VIEWER too.
  *
  * <pre>
- * POST /api/features/generate   Generate features            (APPROVED cases only)
- * POST /api/services/generate   Generate services &amp; steps   (&lt;Tag&gt;Api + &lt;Tag&gt;Steps)
+ * POST /api/automation/generate AI: features + &lt;Tag&gt;Api + &lt;Tag&gt;Steps for the APPROVED cases
  * GET  /api/run/options         environments + feature tags for the Execute dialog
  * POST /api/runs                Execute tests  {env, tags, threads, llm}
  * GET  /api/runs/current?from=N run status + log lines from N
@@ -38,11 +38,11 @@ public class PipelineController {
     this.runs = runs;
   }
 
-  @PostMapping("/features/generate")
-  public PipelineService.FeaturesResult features() throws Exception { return pipeline.generateFeatures(); }
-
-  @PostMapping("/services/generate")
-  public PipelineService.CodegenResult services() throws Exception { return pipeline.generateServices(); }
+  /** AI writes feature files, <Tag>Api and <Tag>Steps for the APPROVED cases (all tags, or ?tag=orders). */
+  @PostMapping("/automation/generate")
+  public com.qa.platform.ai.AiRunner.Result automation(@RequestParam(required = false) String tag) throws Exception {
+    return pipeline.generateAutomation(tag);
+  }
 
   @GetMapping("/run/options")
   public Map<String, Object> options() throws Exception {
@@ -69,8 +69,7 @@ public class PipelineController {
     out.put("llmAvailable", llm.configured());
     out.put("provider", llm.model());
     out.put("tasks", com.qa.platform.ai.AiTasks.NAMES);
-    out.put("specs", pipeline.specs().stream().map(p -> com.qa.platform.common.Workspace.ROOT.toAbsolutePath().normalize()
-        .relativize(java.nio.file.Path.of(p).toAbsolutePath().normalize()).toString()).toList());
+    out.put("specs", pipeline.specs().stream().map(p -> com.qa.platform.common.Workspace.rel(java.nio.file.Path.of(p))).toList());
     return out;
   }
 
@@ -81,7 +80,7 @@ public class PipelineController {
   @PostMapping("/ai/{task}")
   public com.qa.platform.ai.AiRunner.Result ai(@org.springframework.web.bind.annotation.PathVariable String task,
                                                @RequestBody(required = false) Map<String, String> body) throws Exception {
-    if (!com.qa.platform.ai.AiTasks.NAMES.contains(task) || "doc-to-openapi".equals(task)) {
+    if (!List.of("testcases", "spec-audit", "rca").contains(task)) {
       throw new IllegalArgumentException("Unknown AI task for the UI: " + task);
     }
     Map<String, String> args = new LinkedHashMap<>();

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Onboard ANY Swagger/OpenAPI (YAML/JSON), Postman collection or Markdown API doc in one go:
 #   ./scripts/new-spec.sh path/to/your-api.yaml [env]
-# It copies the file into specs/, builds the jar, generates the service-layer Api classes, rebuilds,
-# generates the JSON test cases and prints the config keys you still have to set.
+# It copies the file into specs/, builds the jar and lets the AI design the JSON test cases (or prepares
+# the request for your IDE agent when no LLM token is set), then prints what is left to configure.
 # Safe to re-run after the spec changes (approvals of unchanged cases are kept).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,29 +21,22 @@ else
   SPEC="specs/$NAME"
 fi
 
-echo "== 1/5 Build"
+echo "== 1/2 Build"
 [ -f "$JAR" ] || mvn -q -DskipTests package
 
-echo "== 2/5 Read the spec"
-java -jar "$JAR" ingest --spec "$SPEC" --env "$ENV"
-
-echo "== 3/5 Service layer: <Tag>Api + <Tag>Steps per OpenAPI tag"
-java -jar "$JAR" services --spec "$SPEC"
-
-echo "== 4/5 Rebuild with the generated classes"
-mvn -q -DskipTests package
-
-echo "== 5/5 JSON test cases"
-java -jar "$JAR" generate --spec "$SPEC"
+echo "== 2/2 AI designs the test cases (LLM token), or prepares the request for your IDE agent"
+java -jar "$JAR" generate --spec "$SPEC" || true
 java -jar "$JAR" status
 
 cat <<NEXT
 
 Next:
-  1. Fill in the keys listed under "Config check" in config/env/$ENV.properties, export your token
+  0. No LLM token? In your IDE agent: /ai testcases --spec $SPEC   (then the cases appear in the UI)
+  1. Fill in baseUri, auth.* and testdata.* in config/env/$ENV.properties, export your token
   2. Approve cases:   PLATFORM_USERS="you:pass:REVIEWER" ./scripts/serve.sh   -> http://localhost:8080
   2b. Check the env:  java -jar $JAR doctor --env $ENV   (proxy, company CA, secrets, reachability)
-  3. In the UI:       1 Generate features -> 2 Generate services & steps -> 3 Execute tests -> 4 Open report
-     or from a shell:  java -jar $JAR features && ./scripts/run-tests.sh $ENV "@smoke"
+  3. Automation (AI): UI button "1 Generate automation (AI)" (LLM token on the server), or in your IDE agent: /ai automation
+     then review the diff and: mvn -q test -Dcucumber.execution.dry-run=true
+  3b. Run:            UI "2 Execute tests", or ./scripts/run-tests.sh $ENV "@smoke"; failures: /rca (AI root cause analysis)
   4. Report:          open reports/index.html#rca
 NEXT

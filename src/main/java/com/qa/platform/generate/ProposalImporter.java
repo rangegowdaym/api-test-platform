@@ -47,7 +47,7 @@ public class ProposalImporter {
       }
       tc = tc.withStatus(TestCase.PENDING).withChange("NEW").withVersion(1)
           .withReview(new Review(proposer, "PROPOSED", note, Instant.now()));
-      store.upsert(tc.withHash(CaseFactory.contentHash(tc)));
+      store.upsert(tc.withHash(CaseStore.contentHash(tc)));
       existing.add(tc.id());
       added++;
     }

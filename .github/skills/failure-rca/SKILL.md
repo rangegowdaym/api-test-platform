@@ -1,44 +1,30 @@
 ---
 name: failure-rca
-description: Explain why API tests failed. Runs the rule-based RCA engine (optionally with an LLM narrative), reads evidence, groups failures by root cause and writes triage notes and bug tickets. Use when a run has failures or someone asks "why did these tests fail?".
+description: Root cause analysis of failed API tests by AI: category, owner, grouping, explanation, fix, bug tickets and triage, written into target/rca/rca.json and the report's RCA view. Use after a test run with failures, or when someone asks why tests failed.
 ---
 
-# Failure RCA
+# RCA: the AI decides, testers review
 
-## 1. Produce the RCA
 ```bash
-java -jar target/api-test-platform.jar post-run          # rules only, deterministic
-java -jar target/api-test-platform.jar post-run --llm    # + LLM narrative over HTTP (LLM_PROVIDER + token, see README "LLM narrative")
+java -jar target/api-test-platform.jar post-run          # collects failures (target/rca/failures.json), history, report
+java -jar target/api-test-platform.jar post-run --llm    # same, plus the RCA by the LLM API right away (token needed)
 ```
 
-### Narrative from the IDE agent (no token)
-`ai rca-narrative --mode agent` → answer `target/ai/rca-narrative/requests.md` (one JSON answer per root cause:
-`{"summary","probableCause","suggestedFix","confidence"}`) → `ai rca-narrative --apply --by copilot-agent`.
-`ai triage-summary` works the same way for `target/rca/triage.md`. Details: the `ai-assist` skill.
-Never edit `target/rca/rca.json` or `reports/index.html` directly (the guard hook blocks it).
+## As the IDE agent (no token)
+1. `java -jar target/api-test-platform.jar ai rca --mode agent`
+2. Read `target/ai/rca/requests.md` (masked evidence per failure, the approved expectation, the history) and the
+   evidence files; answer with ONE JSON object (format in the request) into the answer file named there:
+   - every failure in exactly one entry; failures with the same cause grouped (`relatedCaseIds`)
+   - `category`: FUNCTIONAL_BUG, SERVER_ERROR, CONTRACT_DRIFT, PERFORMANCE, ENVIRONMENT, AUTH_CONFIG, TEST_DATA,
+     TEST_DEFECT, FLAKY
+   - `owner`, `summary`, `probableCause`, `suggestedFix`, `confidence`, `bugTicket` (markdown, with the curl)
+   - `triage`: markdown table + next steps
+3. `java -jar target/api-test-platform.jar ai rca --apply --by copilot-agent`
+   → `target/rca/rca.json`, `target/rca/tickets/`, `target/rca/triage.md`, `reports/index.html#rca`
 
-## 2. How the engine decides (src/main/java/com/qa/platform/rca/rules)
-| Category | Typical signal | Owner |
-| --- | --- | --- |
-| ENVIRONMENT | ConnectException, timeout, DNS, 502/503/504 | DevOps |
-| AUTH_CONFIG | 401/403 on a case that expects access; token request failed | QA config |
-| TEST_DATA | "Missing test data", 404/409 on a positive case | QA data |
-| CONTRACT_DRIFT | "Schema validation failed" on a 2xx | API dev / spec owner |
-| SERVER_ERROR | 500/501 (esp. for invalid input → missing validation) | API dev |
-| FUNCTIONAL_BUG | wrong 2xx/4xx, or right status with wrong data | API dev |
-| PERFORMANCE | response-time assertion | API dev / perf |
-| FLAKY | passed ≥ 2 of the last runs and flips, or passed on retry | QA |
-| TEST_DEFECT | step/JSONPath/NPE errors before or around the HTTP call | QA framework |
+`--apply` keeps the facts from the evidence (endpoint, curl, history, new/first failed), recomputes the counts,
+rejects unknown cases and categories, and leaves forgotten failures as UNCLASSIFIED.
 
-Highest score wins; others ≥ 0.3 are listed as "other possible causes". Failures with the same
-signature (category + endpoint + normalised error) become one group; an ENVIRONMENT outage groups by host.
-The LLM never changes the category or owner, only the summary, cause and fix text.
-
-## 3. Check and triage
-For each new group: open `target/evidence/<caseId>.json` and confirm the evidence supports the category.
-Write a triage note with `prompts/triage-summary.md` (or use the `rca-analyst` agent). Bug text is ready in
-`target/rca/tickets/<caseId>.md`.
-
-## 4. Improve the rules (when the same misclassification repeats)
-Add or tune a class in `rca/rules/`, register it in `RcaEngine.rules`, add a case to
-`src/test/java/com/qa/platform/FeatureAndRcaTest.java`, run `mvn -q test -Punit`.
+## Rules
+- Every claim cites evidence. "Unclear, check X" beats a guess.
+- Never change a test or assertion to make it pass; a wrong expectation is TEST_DEFECT, with the spec as proof.

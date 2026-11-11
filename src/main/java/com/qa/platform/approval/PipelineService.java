@@ -1,8 +1,6 @@
 package com.qa.platform.approval;
 
-import com.qa.platform.codegen.CodegenService;
 import com.qa.platform.common.Workspace;
-import com.qa.platform.feature.FeatureWriter;
 import com.qa.platform.generate.CaseStore;
 import com.qa.platform.model.TestCase;
 import java.io.IOException;
@@ -21,60 +19,30 @@ import java.util.stream.Stream;
 import org.springframework.stereotype.Service;
 
 /**
- * The approval UI's pipeline buttons, in order:
- * <ol>
- *   <li><b>Generate features</b> - APPROVED cases only ({@link FeatureWriter}), plus a check that every
- *       {@code When I call the <tag> operation} step already has a generated step definition</li>
- *   <li><b>Generate services &amp; steps</b> - {@code <Tag>Api} + {@code <Tag>Steps} for every spec the cases came from</li>
- *   <li><b>Execute tests</b> - see {@link TestRunService}</li>
- * </ol>
- * Same code as the CLI commands {@code features} and {@code services}: the UI never calls an agent.
+ * The approval UI's pipeline: 1 Generate automation (AI) -> 2 Execute tests ({@link TestRunService}) -> 3 Open report.
+ * "Generate automation" asks the AI (task "automation") to write the feature file, {@code <Tag>Api} and
+ * {@code <Tag>Steps} for the APPROVED cases. In the browser that needs an LLM token on the server; without one
+ * the same task runs in VS Code Copilot agent mode ({@code /ai automation}).
  */
 @Service
 public class PipelineService {
 
   private static final Pattern TAG = Pattern.compile("(?<![\\w@])@([A-Za-z0-9_.\\-]+)");
-  private static final Pattern ANNOTATION = Pattern.compile("@When\\(\"((?:[^\"\\\\]|\\\\.)*)\"\\)");
 
   private final CaseStore store;
 
   public PipelineService(CaseStore store) { this.store = store; }
 
-  public record FeaturesResult(int features, int scenarios, List<String> files, List<String> missingSteps, String next) {}
-
-  public record SpecResult(String spec, String status, int apiClasses, int operations, int stepClasses, int steps, String message) {}
-
-  public record CodegenResult(List<SpecResult> specs, int files, List<String> missingSteps, String next) {}
-
-  public synchronized FeaturesResult generateFeatures() throws IOException {
-    List<TestCase> all = store.readAll();
-    FeatureWriter.Result r = new FeatureWriter().write(all, Workspace.FEATURES);
-    List<String> missing = missingSteps(all);
-    String next = r.scenarios() == 0 ? "No APPROVED cases yet: approve some first."
-        : missing.isEmpty() ? "Step definitions are in place: Execute tests."
-        : "Generate services & steps: " + missing.size() + " operation(s) have no step definition yet.";
-    return new FeaturesResult(r.features(), r.scenarios(),
-        r.files().stream().map(p -> Workspace.ROOT.relativize(p.toAbsolutePath()).toString()).toList(), missing, next);
-  }
-
-  /** Api classes + step definitions for each spec referenced by a test case (or every file in specs/). */
-  public synchronized CodegenResult generateServices() throws IOException {
-    List<SpecResult> results = new ArrayList<>();
-    int files = 0;
-    for (String spec : specs()) {
-      try {
-        CodegenService.Result r = new CodegenService().generate(spec);
-        results.add(new SpecResult(r.spec(), "OK", r.apiClasses(), r.operations(), r.stepClasses(), r.steps(), null));
-        files += r.files().size();
-      } catch (Exception e) {
-        results.add(new SpecResult(spec, "ERROR", 0, 0, 0, 0, e.getMessage()));
-      }
+  public synchronized com.qa.platform.ai.AiRunner.Result generateAutomation(String tag) throws Exception {
+    long approved = store.readAll().stream().filter(t -> TestCase.APPROVED.equals(t.status())).count();
+    if (approved == 0) throw new IllegalStateException("No APPROVED cases yet: approve some first.");
+    var runner = new com.qa.platform.ai.AiRunner();
+    if (!runner.llmAvailable()) {
+      throw new IllegalStateException("No LLM token on the server. In VS Code Copilot agent mode run: /ai automation"
+          + (tag == null || tag.isBlank() ? "" : " --tag " + tag) + "  (or configure LLM_PROVIDER, README section 6a)");
     }
-    List<String> missing = missingSteps(store.readAll());
-    String next = results.isEmpty() ? "No spec found: import one first (specs/ is empty)."
-        : missing.isEmpty() ? "Ready: Execute tests (mvn test compiles the generated classes)."
-        : "Still missing steps for: " + String.join(", ", missing) + " (is their spec in specs/?)";
-    return new CodegenResult(results, files, missing, next);
+    Map<String, String> args = tag == null || tag.isBlank() ? Map.of() : Map.of("tag", tag);
+    return runner.run(com.qa.platform.ai.AiTasks.create("automation", args), com.qa.platform.ai.AiRunner.Mode.LLM);
   }
 
   /** Specs the stored cases were generated from that can still be read, else every file in specs/. */
@@ -90,33 +58,6 @@ public class PipelineService {
       try (Stream<Path> files = Files.list(Workspace.SPECS)) {
         files.filter(Files::isRegularFile).filter(p -> p.toString().matches("(?i).*\\.(ya?ml|json|md|markdown|html?)$"))
             .sorted().forEach(p -> out.add(p.toString()));
-      }
-    }
-    return out;
-  }
-
-  /** "orders createOrder" for every approved case whose When-step has no generated definition yet. */
-  List<String> missingSteps(List<TestCase> all) throws IOException {
-    Set<String> defined = definedSteps();
-    List<String> missing = new ArrayList<>();
-    for (Map.Entry<String, String> used : FeatureWriter.usedSteps(all).entrySet()) {
-      if (!defined.contains(used.getKey())) missing.add(used.getValue());
-    }
-    return missing;
-  }
-
-  /** Step texts of the generated @When annotations, unescaped back to plain feature text. */
-  private static Set<String> definedSteps() throws IOException {
-    Set<String> out = new LinkedHashSet<>();
-    Path dir = Workspace.ROOT.resolve("src/test/java/com/qa/automation/steps/generated");
-    if (!Files.isDirectory(dir)) return out;
-    try (Stream<Path> files = Files.list(dir)) {
-      for (Path f : files.filter(p -> p.toString().endsWith("Steps.java")).toList()) {
-        Matcher m = ANNOTATION.matcher(Files.readString(f));
-        while (m.find()) {
-          String javaUnescaped = m.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
-          out.add(javaUnescaped.replaceAll("\\\\([(){}/\\\\])", "$1"));   // undo StepGenerator.cucumberLiteral
-        }
       }
     }
     return out;

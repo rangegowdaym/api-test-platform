@@ -20,7 +20,7 @@ public final class Workspace {
   public static final Path PROMPTS = ROOT.resolve("prompts");
   public static final Path CONFIG = ROOT.resolve("config");
 
-  /** Path relative to the project root with forward slashes, for messages and the UI. */
+  /** Path relative to the project root with forward slashes, for messages and the UI ("src/test/.../orders.feature"). */
   public static String rel(Path p) {
     Path abs = p.toAbsolutePath().normalize();
     return (abs.startsWith(ROOT) ? ROOT.relativize(abs) : abs).toString().replace('\\', '/');

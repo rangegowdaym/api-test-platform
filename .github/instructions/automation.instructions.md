@@ -6,9 +6,9 @@ Service-based layering. Each layer only calls the one below it:
 
 | Layer | Package | Rule |
 | --- | --- | --- |
-| Steps | `steps`, `steps.generated` | Gherkin glue only. No HTTP, no Rest Assured, no JSON parsing. Call services, assert with `ResponseAssert`. `steps.generated` (`<Tag>Steps`, one When per operation → `<Tag>Api`) is written by the `services` command; never edit it. |
+| Steps | `steps`, `steps.generated` | Gherkin glue only. No HTTP, no Rest Assured, no JSON parsing. Call services, assert with `ResponseAssert`. `steps.generated` (`<Tag>Steps`) is written by the AI (`ai automation`); testers review it. |
 | Services | `services` | Business flows on one domain area (e.g. `OrderService`). Typed models in, typed models out. Assert success when creating test data and register cleanup with `ctx.addCleanup`. |
-| Api (endpoints) | `api`, `api.generated` | One class per OpenAPI tag, one method per operation, raw `ApiResponse` out, no assertions. `api.generated` is written by the `services` command; never edit it. |
+| Api (endpoints) | `api`, `api.generated` | One class per OpenAPI tag, one method per operation, raw `ApiResponse` out, no assertions. `api.generated` is written by the AI (`ai automation`); testers review it. |
 | Client | `client`, `client.auth` | `ApiClient` is the ONLY class that uses Rest Assured for API calls. Auth is a strategy (`AuthProvider`). |
 | Models | `models` | Java records with `@JsonIgnoreProperties(ignoreUnknown = true)` and `@JsonInclude(NON_NULL)`. |
 | Assertions | `assertions` | `ResponseAssert` (fluent) and `SchemaValidator`. |
@@ -22,7 +22,7 @@ Service-based layering. Each layer only calls the one below it:
   `Missing test data: ...`.
 - Transport errors surface as `ApiClientException` with the cause kept; never catch and swallow them in services.
 - Retries are for network errors only (`NetworkRetry`). Never retry or relax an assertion to hide a failure.
-- If a generic step text changes, update `FeatureWriter.render()` and the preview in `src/main/resources/static/app.js`.
-  The generated When-step text comes from `StepGenerator.stepText()`, used by both `FeatureWriter` and `StepGenerator`.
+- If you change a framework class the AI builds on (BaseApi, ApiSteps, ServiceFactory, OperationService, ResponseAssert,
+  ScenarioContext, ApiRequest/ApiResponse), keep it small and documented: its source is part of the automation prompt.
 - Report hooks: `ApiClient` wraps each call in `ReportContext.action`, `ResponseAssert` each check in
   `ReportContext.expect` (both no-ops without the report plugin). Keep those wrappers when you change them.

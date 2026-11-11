@@ -14,7 +14,7 @@ The RCA runs after the tests, so `com.qa.platform.report.ReportRcaMerger` (CLI `
 Execute button of the approval UI) adds `target/rca/rca.json` to that JSON as the `rca` field. `app.js` shows it in:
 - the **RCA** view (`#rca`, key `3`): KPIs, by category, by owner, one card per root cause
 - the **RCA** tab of a failed test's drawer, plus a callout on its Errors tab and an RCA button on Failures cards
-- "Copy prompt", which appends the rule-based RCA
+- "Copy prompt", which appends the RCA
 
 Tests and RCA entries are matched by the scenario's `@TC-<id>` tag (`caseIdOf` in `app.js`); `relatedCaseIds`
 map the other tests of the same root cause.
@@ -42,7 +42,7 @@ map the other tests of the same root cause.
   probableCause, suggestedFix, owner, newFailure, history, curl, bugTicket, otherPossibleCauses, analysedBy)
 
 ## Rules
-- The category and confidence come from `rca/rules`; the page never re-classifies.
+- Category, owner and grouping come from the AI RCA (`ai rca`); the page never re-classifies.
 - Status colours always come with a text label.
 - Nothing unmasked: the merger masks `rca.json` again, but search the page for `Bearer ` followed by a real token,
   or `password":"`, before sharing a report.

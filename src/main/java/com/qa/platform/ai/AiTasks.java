@@ -7,15 +7,14 @@ import java.util.Map;
 public final class AiTasks {
   private AiTasks() {}
 
-  public static final List<String> NAMES = List.of("doc-to-openapi", "spec-audit", "testcase-augment", "rca-narrative", "triage-summary");
+  public static final List<String> NAMES = List.of("testcases", "spec-audit", "automation", "rca");
 
   public static AiTask create(String name, Map<String, String> args) {
     return switch (name) {
-      case "doc-to-openapi" -> new DocToOpenApiTask(args.get("doc"));
+      case "testcases" -> new TestcasesTask(args.get("spec"), args.get("context"));
       case "spec-audit" -> new SpecAuditTask(args.get("spec"));
-      case "testcase-augment" -> new TestcaseAugmentTask(args.get("spec"), args.get("context"));
-      case "rca-narrative" -> new RcaNarrativeTask();
-      case "triage-summary" -> new TriageSummaryTask();
+      case "automation" -> new AutomationTask(args.get("tag"));
+      case "rca" -> new RcaTask();
       default -> throw new IllegalArgumentException("Unknown AI task '" + name + "'. Tasks: " + NAMES);
     };
   }

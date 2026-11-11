@@ -14,10 +14,10 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * Minimal LLM client for every AI task of the platform (com.qa.platform.ai: doc-to-openapi, spec-audit,
- * testcase-augment, rca-narrative, triage-summary; and the Markdown doc fallback), no SDK. Off unless -Dllm.enabled=true / LLM_ENABLED=true
+ * Minimal LLM client for every AI task of the platform (com.qa.platform.ai: testcases, spec-audit, automation, rca),
+ * no SDK. Off unless -Dllm.enabled=true / LLM_ENABLED=true
  * (the --llm flag and the UI checkbox set it) AND a token is present. Callers pass already-masked text and keep a
- * rule-based fallback: every failure returns an empty Optional.
+ * fallback (agent mode or a placeholder): every failure returns an empty Optional.
  *
  * <pre>
  * LLM_PROVIDER     endpoint                                                        token (first one set)

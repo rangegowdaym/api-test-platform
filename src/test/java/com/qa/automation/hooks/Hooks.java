@@ -20,8 +20,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Test-data attachments for every scenario (After order 110, runs first), evidence for RCA (order 100)
- * and test-data cleanup (After order 10, runs last). Cucumber runs @After hooks from the highest order to the lowest.
+ * Evidence for RCA (After order 100, runs first) and test-data cleanup (After order 10, runs last).
+ * Cucumber runs @After hooks from the highest order to the lowest.
  */
 public class Hooks {
 
@@ -52,32 +52,6 @@ public class Hooks {
       ReportContext.environment("Tags", System.getProperty("cucumber.filter.tags", "(all)"));
       ReportContext.environment("Threads", System.getProperty("threads", "1"));
     }
-  }
-
-  /** Attaches every HTTP exchange (request/response with headers, parameters and bodies) to every scenario. */
-  @After(order = 110)
-  public void attachTestData(Scenario scenario) {
-    List<ScenarioContext.Exchange> exchanges = ctx.exchanges();
-    int i = 0;
-    for (ScenarioContext.Exchange ex : exchanges) {
-      i++;
-      String name = (exchanges.size() > 1 ? "call-" + i + " " : "") + label(ex.request());
-      // already masked by CaptureFilter, masked again to be safe
-      scenario.attach(Masking.text(Json.pretty(ex)), "application/json", name + ".json");
-    }
-  }
-
-  /** "POST /user/login" from the recorded request (falls back to the full URL). */
-  private static String label(Evidence.HttpRequest req) {
-    if (req == null) return "http-exchange";
-    String path = req.url();
-    try {
-      String p = java.net.URI.create(req.url()).getPath();
-      if (p != null && !p.isBlank()) path = p;
-    } catch (IllegalArgumentException ignored) {
-      // keep the full URL
-    }
-    return req.method() + " " + path;
   }
 
   /** target/evidence/<caseId>.json for every failed scenario (all scenarios with -Devidence.all=true). */

@@ -15,7 +15,8 @@ the human informed at each gate.
 3. **Human gate**: stop here and tell the person:
    "N cases are waiting for review at http://localhost:8080 (start it with `java -jar target/api-test-platform.jar serve`).
    Tell me when the review is done." Do not continue on your own and never approve on their behalf.
-4. **Features**: when the person says the review is done, run the `feature-author` agent as a subagent.
+4. **Automation (AI)**: when the person says the review is done, run the `feature-author` agent as a subagent
+   (it writes features, `<Tag>Api`, `<Tag>Steps`). Tell the person to review the diff before running.
 5. **Run**: `./scripts/run-tests.sh <env> "<tags>"` (ask for env and tags if not given; default `qa` and `@smoke`).
 6. **RCA**: if anything failed, run the `rca-analyst` agent as a subagent.
 7. Finish with one short summary: pass rate, root causes by owner, and the report path `reports/index.html#rca`.

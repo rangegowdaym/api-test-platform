@@ -70,6 +70,18 @@ public class CaseStore {
   }
 
   /** Replace one case in its file (used by the approval UI). */
+  /** Hash of what a case does (request + expected): a change sends an approved case back to review. */
+  public static String contentHash(TestCase tc) {
+    try {
+      java.util.Map<String, Object> content = new java.util.LinkedHashMap<>();
+      content.put("request", tc.request());
+      content.put("expected", tc.expected());
+      return com.qa.platform.common.Hashing.sha256(Json.MAPPER.writeValueAsString(content)).substring(0, 16);
+    } catch (Exception ex) {
+      throw new IllegalStateException(ex);
+    }
+  }
+
   public void upsert(TestCase tc) {
     Path f = fileFor(tc);
     List<TestCase> list = new ArrayList<>();

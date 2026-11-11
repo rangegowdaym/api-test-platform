@@ -154,18 +154,10 @@ public class TestRunService {
       if (run.llm()) System.setProperty("llm.enabled", "true");
       RcaEngine.Report rca = new RcaEngine(Workspace.EVIDENCE, Workspace.ROOT.resolve("target/run-summary.json"),
           Workspace.HISTORY, Workspace.RCA, new CaseStore(Workspace.TESTCASES), new LlmClient()).run();
-      append("[platform] RCA: " + rca.failures() + " failures -> " + rca.groups() + " root causes (" + rca.newFailures() + " new)");
-      if (run.llm() && rca.groups() > 0) {
-        phase("AI triage");
-        try {
-          var t = new com.qa.platform.ai.AiRunner().run(com.qa.platform.ai.AiTasks.create("triage-summary", Map.of()),
-              com.qa.platform.ai.AiRunner.Mode.LLM);
-          append("[platform] " + com.qa.platform.ai.AiRunner.format(t).strip());
-        } catch (RuntimeException e) {
-          append("[platform] AI triage skipped: " + e.getMessage());
-        }
-      } else if (rca.groups() > 0) {
-        append("[platform] AI narrative + triage without a token: run /rca in Copilot agent mode (or Claude Code)");
+      append("[platform] RCA: " + rca.failures() + " failures -> " + rca.groups() + " root causes (" + rca.newFailures() + " new)"
+          + (run.llm() ? " [AI]" : " [not analysed yet]"));
+      if (rca.failures() > 0 && !run.llm()) {
+        append("[platform] AI root cause analysis without a token: run /rca in Copilot agent mode (or Claude Code)");
       }
       phase("report");
       ReportRcaMerger.Result merged = new ReportRcaMerger().merge(Workspace.REPORTS.resolve("index.html"), Workspace.RCA.resolve("rca.json"));

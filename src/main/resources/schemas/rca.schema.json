@@ -22,7 +22,7 @@
           "relatedCaseIds": { "type": ["array", "null"], "items": { "type": "string" } },
           "scenario": { "type": "string" },
           "endpoint": { "type": "string" },
-          "category": { "enum": ["ENVIRONMENT", "AUTH_CONFIG", "CONTRACT_DRIFT", "SERVER_ERROR", "FUNCTIONAL_BUG", "TEST_DATA", "PERFORMANCE", "FLAKY", "TEST_DEFECT"] },
+          "category": { "enum": ["ENVIRONMENT", "AUTH_CONFIG", "CONTRACT_DRIFT", "SERVER_ERROR", "FUNCTIONAL_BUG", "TEST_DATA", "PERFORMANCE", "FLAKY", "TEST_DEFECT", "UNCLASSIFIED"] },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "signature": { "type": "string" },
           "summary": { "type": "string" },

@@ -7,12 +7,7 @@ import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import com.qa.platform.common.Json;
 import com.qa.platform.common.Workspace;
-import com.qa.platform.generate.CaseDiffer;
-import com.qa.platform.generate.CaseFactory;
-import com.qa.platform.generate.CaseGenerator;
 import com.qa.platform.generate.CaseStore;
-import com.qa.platform.ingest.IngestService;
-import com.qa.platform.model.ApiModel;
 import com.qa.platform.model.Review;
 import com.qa.platform.model.TestCase;
 import java.io.InputStream;
@@ -121,26 +116,33 @@ public class ApprovalService {
     if (!id.equals(edited.id())) throw new IllegalArgumentException("The id cannot be changed");
     edited = edited.withVersion(current.version() + 1).withStatus(TestCase.PENDING).withChange("CHANGED")
         .withReview(new Review(actor, "EDITED", comment, Instant.now()));
-    edited = edited.withHash(CaseFactory.contentHash(edited));
+    edited = edited.withHash(CaseStore.contentHash(edited));
     store.upsert(edited);
     events.save(new ReviewEvent(id, "EDIT", actor, comment, edited.version()));
     return edited;
   }
 
+  /**
+   * The AI designs the test cases for the uploaded spec (task "testcases") and merges them with the stored ones;
+   * every new or changed case is PENDING_REVIEW. Without an LLM token on the server the spec is saved and the
+   * answer says which command to run in Copilot agent mode.
+   */
   @Transactional
-  public synchronized Map<String, Object> importSpec(String specPathOrUrl, String actor, CaseGenerator.Options options) throws Exception {
-    ApiModel model = new IngestService().ingest(specPathOrUrl, Workspace.OUT);
-    List<TestCase> fresh = new CaseGenerator().generate(model, options).values().stream().flatMap(List::stream).toList();
-    CaseDiffer.Result r = new CaseDiffer().diff(store.readBySpec(model.specName()), fresh);
-    store.writeAll(r.merged());
-    events.save(new ReviewEvent("*", "IMPORT", actor, specPathOrUrl + " (" + model.endpoints().size() + " endpoints)", 0));
+  public synchronized Map<String, Object> importSpec(Path spec, String actor, String context) throws Exception {
+    var runner = new com.qa.platform.ai.AiRunner();
     Map<String, Object> out = new LinkedHashMap<>();
-    out.put("spec", model.title() + " " + model.version());
-    out.put("endpoints", model.endpoints().size());
-    out.put("added", r.added());
-    out.put("changed", r.changed());
-    out.put("removed", r.removed());
-    out.put("unchanged", r.unchanged());
+    out.put("spec", spec.getFileName().toString());
+    if (!runner.llmAvailable()) {
+      throw new IllegalStateException("Saved " + Workspace.rel(spec) + ". No LLM token on the server: in VS Code Copilot agent mode run "
+          + "/ai testcases --spec " + Workspace.rel(spec) + "  (or configure LLM_PROVIDER, README section 6a)");
+    }
+    Map<String, String> args = new LinkedHashMap<>();
+    args.put("spec", spec.toString());
+    if (context != null && !context.isBlank()) args.put("context", context);
+    var r = runner.run(com.qa.platform.ai.AiTasks.create("testcases", args), com.qa.platform.ai.AiRunner.Mode.LLM);
+    events.save(new ReviewEvent("*", "IMPORT", actor, Workspace.rel(spec) + " (AI: " + String.join("; ", r.messages()) + ")", 0));
+    out.put("messages", r.messages());
+    out.put("rejected", r.rejected());
     return out;
   }
 

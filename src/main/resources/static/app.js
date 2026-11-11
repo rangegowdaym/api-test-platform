@@ -73,7 +73,7 @@
     $('bulk-reject').textContent = n ? `Reject ${n}` : 'Reject selected';
   }
 
-  // same as StepGenerator.stepText: the step generated into <Tag>Steps
+  // draft only: the AI writes the final scenario and its assertions (Generate automation)
   const stepTag = (t) => String(t || 'default').trim().replace(/[^A-Za-z0-9_.-]+/g, '-');
 
   function gherkin(c) {
@@ -86,7 +86,7 @@
       `  Given test case "${c.id}"`,
       `  ${authLine}`,
       `  # ${c.source.method} ${c.source.path}`,
-      `  When I call the ${stepTag(c.tags[0])} operation "${c.source.operationId}"`,
+      `  When the ${stepTag(c.tags[0])} "${c.source.operationId}" request is sent`,
       `  Then the response status should be ${c.expected.status}`,
     ];
     if (c.expected.schema) lines.push('  And the response should match the documented schema');
@@ -171,19 +171,20 @@
     const file = $('import-file').files[0];
     const url = $('import-url').value.trim();
     const fd = new FormData();
-    let path = '/imports';
+    const ctx = $('import-context').value.trim();
+    let path = '/imports?' + (ctx ? 'context=' + encodeURIComponent(ctx) + '&' : '');
     if (file) fd.append('file', file);
-    else if (url) path += '?url=' + encodeURIComponent(url);
+    else if (url) path += 'url=' + encodeURIComponent(url);
     else { $('import-result').textContent = 'Choose a file or enter a URL.'; return; }
-    $('import-result').textContent = 'Importing…';
+    $('import-result').textContent = 'Saving the spec; the AI is designing the test cases (this can take a minute)…';
     try {
       const r = await api(path, { method: 'POST', body: fd });
-      $('import-result').textContent = `${r.spec}: ${r.endpoints} endpoints · new ${r.added} · changed ${r.changed} · removed ${r.removed} · unchanged ${r.unchanged}`;
+      $('import-result').textContent = (r.messages || []).join(' · ') + ((r.rejected || []).length ? ' · rejected: ' + r.rejected.join('; ') : '');
       await Promise.all([loadSummary(), loadList()]);
     } catch (e) { $('import-result').textContent = e.message; }
   }
 
-  // ---- pipeline: 1 features -> 2 services & steps -> 3 execute -> 4 report ----
+  // ---- pipeline: 1 AI automation -> 2 execute -> 3 report ----
   const run = { options: null, from: 0, timer: 0, id: null, featuresText: '' };
   function stepState(id, cls, html) {
     const el = $('ps-' + id);
@@ -196,33 +197,18 @@
     try { return await fn(); } finally { btn.disabled = false; }
   }
 
+  // 1. AI writes features + <Tag>Api + <Tag>Steps for the approved cases (server LLM), else shows the agent command
   async function features() {
-    stepState('features', 'busy', 'Writing feature files&hellip;');
+    stepState('features', 'busy', 'AI is writing the automation&hellip;');
     try {
-      const r = await busy($('btn-features'), () => api('/features/generate', { method: 'POST' }));
-      const missing = r.missingSteps || [];
-      run.featuresText = `<b>${r.scenarios}</b> approved scenarios in <b>${r.features}</b> feature files`;
-      stepState('features', r.scenarios ? (missing.length ? 'warn' : 'done') : 'warn',
-        run.featuresText + (missing.length ? `<br>${missing.length} operation(s) need step definitions: run step 2` : ''));
-      if (missing.length) stepState('services', 'warn', `Needed for: ${missing.slice(0, 4).map(esc).join(', ')}${missing.length > 4 ? '&hellip;' : ''}`);
-      toast(r.next || 'Features written', !r.scenarios);
-    } catch (e) { stepState('features', 'fail', esc(e.message)); toast(e.message, true); }
-  }
-
-  async function services() {
-    stepState('services', 'busy', 'Generating &lt;Tag&gt;Api and &lt;Tag&gt;Steps&hellip;');
-    try {
-      const r = await busy($('btn-services'), () => api('/services/generate', { method: 'POST' }));
-      const ok = r.specs.filter((x) => x.status === 'OK');
-      const bad = r.specs.filter((x) => x.status !== 'OK');
-      const lines = ok.map((x) => `<b>${esc(x.spec)}</b>: ${x.apiClasses} Api, ${x.stepClasses} Steps (${x.steps} steps)`)
-        .concat(bad.map((x) => `<span class="error">${esc(x.spec)}: ${esc(x.message)}</span>`));
-      const missing = r.missingSteps || [];
-      stepState('services', !r.specs.length || bad.length ? 'fail' : missing.length ? 'warn' : 'done',
-        (lines.join('<br>') || 'No spec in specs/') + (missing.length ? `<br>Still missing: ${missing.map(esc).join(', ')}` : ''));
-      if (ok.length && !missing.length && $('ps-features').classList.contains('warn') && run.featuresText) stepState('features', 'done', run.featuresText);
-      toast(r.next, bad.length > 0 || !r.specs.length);
-    } catch (e) { stepState('services', 'fail', esc(e.message)); toast(e.message, true); }
+      const r = await busy($('btn-features'), () => api('/automation/generate', { method: 'POST' }));
+      const lines = r.messages.map(esc).join('<br>') + (r.rejected.length ? '<br><span class="error">rejected: ' + r.rejected.map(esc).join('; ') + '</span>' : '');
+      stepState('features', r.rejected.length ? 'warn' : 'done', `<b>${r.applied}</b> of ${r.requests} tags written<br>${lines}`);
+      toast(r.rejected.length ? 'Some tags were rejected: see step 1' : 'Automation written: review the diff, then Execute tests', r.rejected.length > 0);
+    } catch (e) {
+      stepState('features', 'warn', esc(e.message));
+      toast(e.message, true);
+    }
   }
 
   // ---- execute dialog ----
@@ -295,7 +281,7 @@
   }
 
   // ---- AI assist: server LLM when configured, else the commands for Copilot agent mode ----
-  const AI_AGENT_CMD = (task, spec) => `java -jar target/api-test-platform.jar ai ${task}${spec && (task === 'spec-audit' || task === 'testcase-augment') ? ' --spec ' + spec : ''} --mode agent`;
+  const AI_AGENT_CMD = (task, spec) => `java -jar target/api-test-platform.jar ai ${task}${spec && (task === 'spec-audit' || task === 'testcases') ? ' --spec ' + spec : ''} --mode agent`;
   let aiOptions = null;
   async function openAi() {
     $('ai-dialog').showModal();
@@ -320,7 +306,7 @@
     try {
       const r = await api('/ai/' + task, { method: 'POST', body: JSON.stringify({ spec, context: $('ai-context').value }) });
       out.textContent = `${r.applied} of ${r.requests} applied\n` + r.messages.join('\n') + (r.rejected.length ? '\nrejected:\n' + r.rejected.join('\n') : '');
-      if (task === 'testcase-augment' && r.applied) { await loadSummary(); await loadList(); toast('Proposed cases added as Pending review'); }
+      if (task === 'testcases' && r.applied) { await loadSummary(); await loadList(); toast('Proposed cases added as Pending review'); }
     } catch (e) { out.textContent = e.message; }
     finally { document.querySelectorAll('[data-ai]').forEach((b) => (b.disabled = false)); }
   }
@@ -398,7 +384,6 @@
   $('btn-import').onclick = () => { $('import-result').textContent = ''; $('import-dialog').showModal(); };
   $('import-go').onclick = doImport;
   $('btn-features').onclick = features;
-  $('btn-services').onclick = services;
   $('btn-run').onclick = openRun;
   $('run-go').onclick = startRun;
   $('run-cancel').onclick = cancelRun;

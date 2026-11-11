@@ -4,7 +4,7 @@ SPEC ?= specs/your-api.yaml
 ENV ?= qa
 TAGS ?= @smoke
 
-.PHONY: build unit new-spec new-env doctor serve generate services status features test report clean
+.PHONY: build unit new-spec new-env doctor serve generate automation status test report clean
 
 build:            ## build the runnable jar
 	mvn -q -DskipTests package
@@ -16,16 +16,14 @@ new-env:          ## add an environment (make new-env ENV=sit)
 	./scripts/new-env.sh $(ENV)
 doctor: build     ## check config, secrets, proxy, company CA, reachability (make doctor ENV=sit)
 	java -jar $(JAR) doctor --env $(ENV)
-services: build   ## spec -> <Tag>Api endpoint classes + <Tag>Steps step definitions
-	java -jar $(JAR) services --spec $(SPEC) && mvn -q -DskipTests package
 serve: build      ## approval UI on :8080 (needs PLATFORM_USERS)
 	java -jar $(JAR) serve
-generate: build   ## spec -> JSON test cases (make generate SPEC=specs/x.yaml)
+generate: build   ## AI designs test cases for SPEC (MODE=agent|llm, CONTEXT="...")
 	java -jar $(JAR) generate --spec $(SPEC)
 status: build
 	java -jar $(JAR) status
-features: build   ## approved cases -> feature files
-	java -jar $(JAR) features
+automation: build ## AI writes features + <Tag>Api + <Tag>Steps for APPROVED cases (MODE=agent|llm, TAG=...)
+	java -jar $(JAR) ai automation $(if $(TAG),--tag $(TAG),) --mode $(or $(MODE),auto)
 test: build       ## run tests + RCA + report (make test ENV=qa TAGS=@smoke)
 	./scripts/run-tests.sh $(ENV) "$(TAGS)"
 report: build     ## rebuild RCA + report from the last run

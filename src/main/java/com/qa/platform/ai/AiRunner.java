@@ -99,7 +99,13 @@ public class AiRunner {
     sb.append(task.describe()).append("\n\n");
     sb.append("## How to answer (IDE agent)\n\n");
     sb.append("1. For EACH request below, follow the instructions and the request text.\n");
-    sb.append("2. Write ONLY the answer (").append(task.format()).append(") to the answer file named in the request.\n");
+    if ("files".equals(task.format())) {
+      sb.append("2. Write each file of your answer as a real file under the answer folder named in the request, keeping its\n")
+        .append("   project path: e.g. <answer folder>/src/test/java/com/qa/automation/api/generated/OrdersApi.java.\n")
+        .append("   (No JSON needed; optional notes.md in the answer folder for the reviewer.)\n");
+    } else {
+      sb.append("2. Write ONLY the answer (").append(task.format()).append(") to the answer file named in the request.\n");
+    }
     sb.append("3. Then run: `java -jar target/api-test-platform.jar ai ").append(task.name())
         .append(" --apply --by copilot-agent` (or `--by claude-code`). Fix rejected answers and apply again.\n\n");
     sb.append("Answers are validated exactly like LLM answers; nothing changes until --apply. Never write the\n");
@@ -111,10 +117,10 @@ public class AiRunner {
     for (AiTask.AiRequest r : requests) {
       PromptLibrary.Prompt p = PromptLibrary.load(r.prompt(), r.vars());
       if (system == null) system = p.system();
-      Path answerFile = answers.resolve(AiText.safeId(r.id()) + "." + ext);
+      Path answerFile = "files".equals(task.format()) ? answers.resolve(AiText.safeId(r.id())) : answers.resolve(AiText.safeId(r.id()) + "." + ext);
       manifestReq.put(r.id(), rel(answerFile));
       body.append("---\n\n## Request ").append(r.id()).append("\n\n");
-      body.append("Answer file: `").append(manifestReq.get(r.id())).append("`\n\n");
+      body.append("files".equals(task.format()) ? "Answer folder: `" : "Answer file: `").append(manifestReq.get(r.id())).append("`\n\n");
       body.append("````text\n").append(p.user().strip()).append("\n````\n\n");
     }
     sb.append("## Instructions (same for every request)\n\n").append(system == null ? "" : system.strip()).append("\n\n");
@@ -165,7 +171,8 @@ public class AiRunner {
         continue;
       }
       try {
-        messages.add(task.apply(r, Files.readString(answer), label));
+        String text = Files.isDirectory(answer) ? filesAsJson(answer) : Files.readString(answer);
+        messages.add(task.apply(r, text, label));
         applied++;
       } catch (IllegalArgumentException ex) {
         rejected.add(id + ": " + ex.getMessage());
@@ -178,9 +185,21 @@ public class AiRunner {
 
   /** Path relative to the project root (answer paths in the manifest stay valid wherever the project lives). */
   private static String rel(Path p) {
-    Path base = Workspace.ROOT.toAbsolutePath().normalize();
-    Path abs = p.toAbsolutePath().normalize();
-    return abs.startsWith(base) ? base.relativize(abs).toString().replace('\\', '/') : abs.toString();
+    return Workspace.rel(p);
+  }
+
+  /** An answer folder (files written by the agent at their project paths) as {"files":[{path, content}]}. */
+  private static String filesAsJson(Path dir) throws IOException {
+    ObjectNode root = Json.MAPPER.createObjectNode();
+    var files = root.putArray("files");
+    try (Stream<Path> s = Files.walk(dir)) {
+      for (Path f : s.filter(Files::isRegularFile).sorted().toList()) {
+        String rel = dir.relativize(f).toString().replace('\\', '/');
+        if (rel.equals("notes.md")) { root.put("notes", Files.readString(f)); continue; }
+        files.addObject().put("path", rel).put("content", Files.readString(f));
+      }
+    }
+    return Json.MAPPER.writeValueAsString(root);
   }
 
   private static String ext(String format) {

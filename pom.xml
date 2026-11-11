@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   api-test-platform: ONE Maven module that contains
-    * the platform  (src/main): spec ingest -> JSON test cases -> approval UI -> feature files -> RCA -> report
+    * the platform  (src/main): AI test cases -> human approval UI -> AI automation -> runs -> AI RCA -> report
     * the automation (src/test): Rest Assured + Cucumber + TestNG runner, steps, hooks, evidence capture
 
   Common commands (see README.md for the full list):
     mvn -DskipTests package                                   build the runnable jar
     java -jar target/api-test-platform.jar serve              approval UI on http://localhost:8080
-    See README.md for spec generation commands.
-    java -jar target/api-test-platform.jar features
+    java -jar target/api-test-platform.jar ai automation          AI writes features + Api + Steps (approved cases)
     mvn test -Denv=qa -Dcucumber.filter.tags="@smoke"         run the automated API tests
     java -jar target/api-test-platform.jar rca && java -jar target/api-test-platform.jar report
 -->
@@ -33,14 +32,9 @@
   <properties>
     <java.version>17</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-
-    <swagger-parser.version>2.1.22</swagger-parser.version>
     <cucumber.version>7.18.1</cucumber.version>
     <testng.version>7.10.2</testng.version>
-    <datafaker.version>2.3.1</datafaker.version>
     <picocli.version>4.7.6</picocli.version>
-    <jsoup.version>1.17.2</jsoup.version>
-    <flexmark.version>0.64.8</flexmark.version>
 
     <!-- runtime switches for the test run -->
     <env>qa</env>
@@ -91,31 +85,11 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- ===== platform: spec ingest + generation ===== -->
-    <dependency>
-      <groupId>io.swagger.parser.v3</groupId>
-      <artifactId>swagger-parser</artifactId>
-      <version>${swagger-parser.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>net.datafaker</groupId>
-      <artifactId>datafaker</artifactId>
-      <version>${datafaker.version}</version>
-    </dependency>
+    <!-- ===== platform: CLI, YAML specs, schema checks (the AI reads the specs) ===== -->
     <dependency>
       <groupId>info.picocli</groupId>
       <artifactId>picocli</artifactId>
       <version>${picocli.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.jsoup</groupId>
-      <artifactId>jsoup</artifactId>
-      <version>${jsoup.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.vladsch.flexmark</groupId>
-      <artifactId>flexmark-all</artifactId>
-      <version>${flexmark.version}</version>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.dataformat</groupId>

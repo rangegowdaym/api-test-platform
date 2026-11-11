@@ -11,7 +11,7 @@ Allow: exit 0 with no output (normal permission flow continues).
 
 Enforces the hard rules in .github/copilot-instructions.md:
   1. agents never approve test cases and never edit testcases/ directly (only testcases/_proposed/)
-  2. generated feature files, <Tag>Api and <Tag>Steps classes are never hand-edited
+  2. generated feature files, <Tag>Api and <Tag>Steps arrive only through `ai automation --apply` (validated)
   3. no literal secrets in config/env/*.properties
 """
 import json
@@ -67,16 +67,15 @@ SECRET_LINE = re.compile(r'^\s*[\w.-]*(secret|password|token|apikey|api_key|key)
 
 if EDIT and not SHELL:
     for p in paths:
+        if re.search(r"(^|/)target/ai/", p):
+            continue   # answer folders of the AI tasks: --apply validates them
         if re.search(r"(^|/)src/test/resources/features/generated/", p):
-            deny("generated feature files are rebuilt from approved test cases. "
-                 "Run: java -jar target/api-test-platform.jar features")
+            deny("feature files are written by the AI automation task: write them into the answer folder of target/ai/automation/requests.md and run: java -jar target/api-test-platform.jar ai automation --apply (it validates them)")
         if re.search(r"(^|/)target/rca/rca\.json$", p) or re.search(r"(^|/)reports/index\.html$", p):
-            deny("rca.json and the report are written by the platform. Answer target/ai/rca-narrative/requests.md "
-                 "and run: java -jar target/api-test-platform.jar ai rca-narrative --apply")
+            deny("rca.json and the report are written through the AI rca task: answer target/ai/rca/requests.md and run: java -jar target/api-test-platform.jar ai rca --apply")
         if re.search(r"(^|/)src/test/java/com/qa/automation/(api|steps)/generated/[^/]+\.java$", p) \
                 and not p.endswith("package-info.java"):
-            deny("generated Api and Steps classes are rebuilt from the spec. "
-                 "Run: java -jar target/api-test-platform.jar services --spec specs/<spec>")
+            deny("<Tag>Api and <Tag>Steps are written by the AI automation task: write them into the answer folder of target/ai/automation/requests.md and run: java -jar target/api-test-platform.jar ai automation --apply (it validates them)")
         if re.search(r"(^|/)testcases/", p) and not re.search(r"(^|/)testcases/_proposed/", p):
             deny("test cases change only through the approval UI. Write proposals to testcases/_proposed/ "
                  "and run: java -jar target/api-test-platform.jar propose --file <file>")

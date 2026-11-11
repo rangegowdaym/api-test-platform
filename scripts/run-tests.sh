@@ -13,7 +13,7 @@ JAR=target/api-test-platform.jar
 [ -f "$JAR" ] || mvn -q -DskipTests package || { echo "build failed"; exit 2; }
 
 if ! ls src/test/resources/features/generated/*.feature >/dev/null 2>&1; then
-  echo "No generated features. Approve cases in the UI, then: java -jar $JAR features"
+  echo "No generated features. Approve cases in the UI, then let the AI write them: /ai automation (IDE agent) or java -jar $JAR ai automation"
   exit 3
 fi
 

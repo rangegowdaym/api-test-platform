@@ -16,7 +16,7 @@ import java.util.Map;
  */
 public interface AiTask {
 
-  /** CLI name, e.g. "testcase-augment". */
+  /** CLI name, e.g. "testcases". */
   String name();
 
   /** Expected answer format: "json", "yaml" or "markdown" (also the answer file extension). */

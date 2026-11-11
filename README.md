@@ -1,387 +1,430 @@
-# api-test-platform
+# API Test Platform
 
-Swagger/OpenAPI or API docs → JSON test cases → **human approval** → Cucumber features →
-Rest Assured + TestNG automation → **RCA for every failure** in your Modern Cucumber report, with an RCA view.
+Turn an API specification or document into human-reviewed Cucumber API tests, execute them with
+Rest Assured and TestNG, and investigate failures in an HTML report. The platform is a single
+Java 17 Maven project with a CLI, an approval UI, an automation framework, and optional AI assistance.
 
-One Maven module, one runnable jar, plus a **GitHub Copilot** layer: repository and path instructions,
-custom agents, agent skills, prompt files (slash commands), a guard hook and the cloud agent setup workflow.
-Works in VS Code (Copilot Chat, agent mode), GitHub Copilot CLI and the Copilot cloud agent on GitHub.com.
+> **Human approval is required.** AI proposes test cases and writes automation; a reviewer decides
+> which cases are approved and reviews generated code, assertions, and root cause analysis (RCA).
+> Never weaken a failing assertion just to make a run pass.
 
----
+## Contents
 
-## 0. Quick start with ANY Swagger file
+- [How it works](#how-it-works)
+- [Prerequisites and build](#prerequisites-and-build)
+- [Quick start: VS Code Copilot agent](#quick-start-vs-code-copilot-agent)
+- [Use an LLM API from the UI or CLI](#use-an-llm-api-from-the-ui-or-cli)
+- [Approval UI](#approval-ui)
+- [AI tasks and agent mode](#ai-tasks-and-agent-mode)
+- [Environments and company networks](#environments-and-company-networks)
+- [Run tests and investigate failures](#run-tests-and-investigate-failures)
+- [CLI reference](#cli-reference)
+- [Docker and CI](#docker-and-ci)
+- [Project structure and extensions](#project-structure-and-extensions)
+- [Troubleshooting](#troubleshooting)
 
-```bash
-mvn -q package -Punit
-./scripts/new-spec.sh /path/to/your-api.yaml            # copy → read → <Tag>Api + <Tag>Steps → rebuild → JSON cases
-#   prints the config keys still missing: baseUri, auth.default.*, testdata.<pathId>
-vi config/env/qa.properties && export QA_API_TOKEN=...
-PLATFORM_USERS="you:pass:REVIEWER" ./scripts/serve.sh   # http://localhost:8080: approve, then the 4 pipeline buttons
+## How it works
+
+```text
+API spec / doc
+   |
+   +-- AI spec audit (optional) --> testability gaps and owner questions
+   |
+   +-- AI test cases -----------> PENDING_REVIEW cases in testcases/
+                                      |
+                                  human review in UI
+                                      |
+                                  APPROVED cases
+                                      |
+                                  AI automation
+                                      |
+                         feature + <Tag>Api + <Tag>Steps
+                                      |
+                              review and dry run
+                                      |
+                           Cucumber / TestNG test run
+                                      |
+                           evidence + HTML report
+                                      |
+                        failure collection + optional AI RCA
 ```
 
-In IntelliJ, select the shared **Unit tests and package** run configuration.
-For an existing Maven configuration, replace its **Run** field with `-q package -Punit`.
-Do not paste shell operators (`&&`), another `mvn`, or comments into that field.
+The CLI can use either an IDE agent or an LLM API. The browser UI does **not** call the VS Code
+Copilot session: its AI buttons call an LLM API configured on the server. If no server-side LLM
+is configured, use Copilot agent mode separately for AI tasks and return to the UI for review
+and execution.
 
-### The four buttons in the approval UI
+Cases are stored as JSON under `testcases/`; the UI also stores review events in a database.
+Regeneration merges cases for the same spec: new and changed cases are pending review, unchanged
+cases retain their status, and cases no longer generated can become obsolete. Reviewer-edited
+cases and custom cases receive special protection during merging. Review the resulting changes.
 
-| Button | What it runs | Writes |
+## Prerequisites and build
+
+- JDK 17 and Maven; Maven 3.9+ supports the documented `MAVEN_ARGS` environment variable.
+- `bash` and `jq` for the supplied shell scripts; Python 3 for the Copilot guard hook.
+- Optional: VS Code with Copilot agent mode, or an approved LLM API; Docker for the container setup.
+- Network access to the target API is required when running API tests or the environment doctor.
+
+From the project directory:
+
+```bash
+mvn -q test -Punit
+mvn -q -DskipTests package
+```
+
+The first command runs platform unit tests; the second builds `target/api-test-platform.jar`.
+Maven may need network access to download dependencies. The repository includes example specs;
+replace them or add your own under `specs/`.
+
+## Quick start: VS Code Copilot agent
+
+This path needs a configured Copilot agent in VS Code but **no separate platform LLM API key**.
+Commands below use the included `specs/openapi.yaml` as an example; use your own spec and an
+authorized test environment for real work.
+
+### 1. Audit and design cases
+
+In Copilot Chat, select **Agent** mode and ask:
+
+```text
+Use the ai-assist workflow to audit specs/openapi.yaml for testability.
+```
+
+Review the audit in `target/platform/spec-audit-openapi.yaml.md`, resolve important questions
+with the API owner, and then ask:
+
+```text
+Use the ai-assist workflow to design test cases for specs/openapi.yaml.
+```
+
+The `/ai` prompt in `.github/prompts/ai.prompt.md` can also be used to select `spec-audit` or
+`testcases` and supply `--spec specs/openapi.yaml`. The agent exports requests, answers them,
+and applies validated results. New cases are **PENDING_REVIEW**, not approved.
+
+### 2. Start the UI and review cases
+
+Set a local reviewer password without placing it in shell history or a project file:
+
+```bash
+printf 'Choose a local reviewer password: '
+read -rs REVIEWER_PASSWORD
+echo
+export PLATFORM_USERS="reviewer:${REVIEWER_PASSWORD}:REVIEWER"
+unset REVIEWER_PASSWORD
+./scripts/serve.sh
+```
+
+Open [http://localhost:8080](http://localhost:8080), sign in as `reviewer`, and review the
+pending cases. A human must approve the cases to automate. See [Approval UI](#approval-ui)
+for roles and security considerations.
+
+### 3. Generate and review automation
+
+In Copilot Chat, ask:
+
+```text
+Use the ai-assist workflow to generate automation for the approved test cases.
+```
+
+Alternatively, use `/ai` with task `automation`, optionally specifying `--tag pet`. The agent
+generates the feature, API class, and step class through the platform's agent apply workflow.
+Review all generated files and assertions; in a Git checkout, use `git diff` as well. Then run:
+
+```bash
+mvn -q test -Dcucumber.execution.dry-run=true
+```
+
+The dry run compiles the automation and checks that steps bind; it does not prove that API
+responses or assertions are correct.
+
+### 4. Configure and run
+
+Edit `config/env/qa.properties` for the actual API URL, auth profile, and required test data.
+The checked-in QA example points to the public Petstore, so do not run it unintentionally.
+Use environment variables for real secrets.
+
+```bash
+java -jar target/api-test-platform.jar doctor --env qa
+./scripts/run-tests.sh qa "@smoke"
+```
+
+Check `reports/index.html` and the run output. If there are failures, ask the agent to use the
+`ai-assist` RCA workflow, or use `/rca`; review its conclusions against the evidence. The UI can
+also run the tests and open the report.
+
+## Use an LLM API from the UI or CLI
+
+Use this route if an approved server-side LLM should handle the UI's **Import spec**,
+**AI assist**, **Generate automation (AI)**, or optional AI RCA. Set the variables in the
+environment that starts the UI server; the browser does not pass its Copilot credentials to it.
+Restart the UI after changing the server environment.
+
+### Important: GitHub Models retirement
+
+The current code defaults `LLM_PROVIDER` to `github-models` and can read `GITHUB_MODELS_TOKEN`
+or `GITHUB_TOKEN`, but [GitHub Models was retired on July 30, 2026](https://docs.github.com/en/github-models).
+Those settings do not make the retired inference API available. A GitHub Copilot subscription or
+VS Code session token is not a substitute for an LLM API key. Explicitly choose a supported
+provider or use agent mode.
+
+### Company OpenAI-compatible gateway
+
+Obtain an approved gateway base URL, model ID, API key, and authentication-header requirements
+from your platform team. Confirm what data may be sent to the provider.
+
+```bash
+export LLM_PROVIDER=openai
+export LLM_BASE_URL="https://your-approved-gateway.example.com/v1"
+export LLM_MODEL="your-model-id"
+
+printf 'LLM API key: '
+read -rs LLM_API_KEY
+echo
+export LLM_API_KEY
+```
+
+The client sends requests to `LLM_BASE_URL/chat/completions` using
+`Authorization: Bearer <key>` by default. If your gateway expects a different header, set it
+before starting the UI, for example `export LLM_AUTH_HEADER=api-key`. For non-Authorization
+headers the key is sent without the `Bearer` prefix.
+
+To check the integration using an authorized, non-sensitive spec:
+
+```bash
+java -jar target/api-test-platform.jar ai spec-audit \
+  --spec specs/openapi.yaml --mode llm
+```
+
+This performs an external API call and writes an audit if accepted. `--mode llm` requires a
+configured key; inspect `[llm]` errors and rejected results rather than assuming success. Then
+set `PLATFORM_USERS` as shown above and start `./scripts/serve.sh` in the same terminal.
+
+### Other supported client configurations
+
+| Provider | Required settings | Notes |
 | --- | --- | --- |
-| **1 Generate features** | `FeatureWriter` over **APPROVED** cases only (same as `java -jar $JAR features`) | `src/test/resources/features/generated/<tag>.feature`; warns if a step definition is missing |
-| **2 Generate services & steps** | `ServiceGenerator` + `StepGenerator` for every spec the cases came from (same as `services --spec`) | `api/generated/<Tag>Api.java`, `steps/generated/<Tag>Steps.java` |
-| **3 Execute tests…** | dialog: environment (+ **Check environment**), tag checkboxes (any of / all of, exclude `@wip`) or a free tag expression, threads, optional LLM narrative → `mvn -B test -Denv=… -Dcucumber.filter.tags=…`, live log, then RCA + report merge in-process | `reports/index.html` (with RCA), `target/rca/`, `target/platform/last-run.log` |
-| **4 Open report** | opens `/reports/index.html` (the RCA view when tests failed) | – |
+| OpenAI or compatible | `LLM_PROVIDER=openai`, `LLM_API_KEY`, `LLM_MODEL`; set `LLM_BASE_URL` for a gateway | The default base URL is `https://api.openai.com/v1`; `OPENAI_API_KEY` is a fallback key. Verify model availability with your provider. |
+| Azure OpenAI | `LLM_PROVIDER=azure-openai`, `LLM_BASE_URL`, `LLM_DEPLOYMENT`, `LLM_API_KEY` | Base URL is the resource URL; optional `LLM_API_VERSION` defaults to `2024-10-21`. `AZURE_OPENAI_API_KEY` is a fallback. |
+| Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, `LLM_MODEL` | `LLM_API_KEY` is a fallback; optional `LLM_BASE_URL` defaults to `https://api.anthropic.com`. Set an available model explicitly. |
 
-The same from a terminal: `./scripts/run-tests.sh qa "@smoke"` then `open reports/index.html#rca`.
-Only REVIEWER users can press 1–3 (VIEWER users can watch a run and open the report). One run at a time; the
-command is a fixed argument list (no shell), env and tags are validated. Maven: `./mvnw` if present, else `mvn`
-(`mvn.cmd` on Windows); override with `PLATFORM_MVN=/path/to/mvn`.
+`LLM_PROXY` controls the LLM client's proxy; otherwise it checks `HTTPS_PROXY` / `https_proxy`
+and then the JVM default. A gateway using a private CA may require a Java trust store. Do not
+disable TLS verification to work around certificate errors.
 
-Several specs can live side by side: run `new-spec.sh` for each. Each spec's cases and `<Tag>Api` classes are
-replaced only by that spec. The project ships with no API-specific code; `src/test/resources/fixtures/sample-api.yaml`
-is only used by the platform's unit tests.
+AI inputs are processed by masking code, but masking is not a guarantee that every sensitive
+value is detected. Review specs, test cases, evidence, and organizational data-handling rules
+before sending anything to an external provider. Never put API keys or passwords in a prompt,
+source file, or chat.
 
-## 1. Architecture
+## Approval UI
 
-```
-                 ┌──────────────────────── src/main (platform, one jar) ─────────────────────────┐
- specs/          │                                                                               │
- YAML/JSON  ──►  │  ingest/            generate/              approval/ (Spring Boot)            │
- Postman    ──►  │  SpecLoader    ──►  CaseGenerator     ──►  UI + REST API  ◄── human reviewer  │
- Markdown   ──►  │  ApiModelMapper     rules/*  (7)           audit trail (H2/Postgres)          │
- URL        ──►  │  adapters/*         CaseDiffer             │                                  │
-                 │                     CaseStore ──► testcases/<tag>/<operationId>.json (Git)     │
-                 │                                            │ APPROVED                         │
-                 │  feature/FeatureWriter  ◄──────────────────┘                                  │
-                 └──────────┬────────────────────────────────────────────────────────────────────┘
-                            ▼
-      src/test/resources/features/generated/*.feature
-                            │
-                 ┌──────────▼──────────── src/test (automation) ─────────────────────────────────┐
-                 │  ApiTestRunner (Cucumber + TestNG, parallel)                                   │
-                 │  steps ──► services ──► api/<Tag>Api ──► client/ApiClient ──► Rest Assured     │
-                 │  hooks/Hooks ──► target/evidence/<caseId>.json   plugin ──► target/run-summary │
-                 └──────────┬────────────────────────────────────────────────────────────────────┘
-                            ▼
-                 rca/RcaEngine + rules/* (9) [+ optional GitHub Models narrative] ──► target/rca/rca.json
-                 org.rg.reporter.ModernCucumberReporter (during mvn test) ──► reports/index.html
-                 report/ReportRcaMerger (after RCA) ──► adds rca to the page: #rca view + RCA tab per test
-```
+The UI defaults to `127.0.0.1:8080`. `./scripts/serve.sh` requires `PLATFORM_USERS`; direct
+`java -jar target/api-test-platform.jar serve` has a local development default
+`admin:admin:REVIEWER`. **Set your own credentials and do not expose that default.**
+`PLATFORM_USERS` accepts comma-separated `name:password:ROLE` entries, where roles are
+`REVIEWER` and `VIEWER`. Use strong passwords, limit who can access the server, and follow
+your organization's authentication and deployment policies before sharing it.
 
-Design choices:
+| UI action | Behavior |
+| --- | --- |
+| Import spec | Upload a supported file or supply a URL and optional context. With a server LLM, it proposes cases. Without one, the saved spec and agent-mode instructions are returned instead. |
+| Review cases | Filter and inspect cases, edit JSON, approve, reject, or request changes. Editing returns a case to review. |
+| AI assist | Runs supported test-case, spec-audit, and RCA tasks using the server LLM; without a token it provides agent-mode guidance. |
+| Generate automation (AI) | Requires approved cases and a configured server LLM. Writes automation for review; it does not invoke VS Code Copilot. |
+| Execute tests | Select environment, tags and thread count; optionally check the environment and enable server-side AI RCA. |
+| Open report | Opens the HTML report and its RCA view. |
 
-- **Git is the source of truth** for test cases (`testcases/`). The UI reads and writes those files; the database only
-  keeps the audit trail. Reviews show up in pull requests like code.
-- **Stable ids** (`TC-<operationId>-<category>-<detail>`) and a content hash let a spec be re-imported any time:
-  unchanged cases keep their approval, changed ones go back to review, removed ones become OBSOLETE.
-- **Thin scenarios, generated steps.** A scenario names its case id and its operation
-  (`When I call the orders operation "createOrder"`); the request and expectations come from the approved JSON at
-  run time. The step definition and the endpoint class for every operation are generated from the spec, so a new
-  API needs no hand-written Java.
-- **Rules first, LLM second.** RCA categories are deterministic and unit-tested; an LLM (optional, GitHub Models by
-  default, so no extra key in Actions) only rewrites the narrative.
-- **Human gate is enforced**, not just documented: the UI is the only place to approve, and a Copilot `preToolUse`
-  hook blocks agents from approving or editing cases and generated features.
+`VIEWER` access is read-only; reviewers perform changes and start runs. By default review
+events use an H2 database at `target/platform/approval-db`. Set `DB_URL`, `DB_USER`, and
+`DB_PASSWORD` for a PostgreSQL-backed audit database. Cases remain in files.
 
-## 1a. Automation design: service-based layers
+## AI tasks and agent mode
 
-```
-Feature (Gherkin)
-  └─ Steps           steps/       ApiSteps (shared Given/Then) · generated/<Tag>Steps (one When per operation) · <Domain>Steps you add
-       └─ Services   services/    ServiceFactory → OperationService.prepare (JSON case → Api arguments) · api(<Tag>Api.class) · <Domain>Service (business flows,
-            │                     typed models, test-data setup + cleanup)
-            └─ Api   api/         BaseApi → generated <Tag>Api: one method per operation, raw ApiResponse, no assertions
-                 └─ ApiClient     client/      builds the call: base URI per service, auth strategy, timeouts, JSON
-                                               serialisation, masked capture for evidence → Rest Assured
-Assertions: ResponseAssert.assertThat(response).hasStatus(200).matchesSchema(schema).hasField("$.name", "rex")
-```
-
-Practices applied: single responsibility per layer; immutable `ApiRequest` built with a builder; `ApiResponse` hides
-Rest Assured; Strategy (`AuthProvider`) and Factory (`AuthProviders`, `ServiceFactory`) patterns; constructor
-injection with PicoContainer, one public constructor each; no shared mutable state between parallel scenarios;
-typed records for models; failures as `ApiClientException` with the cause kept; generated code separated from
-hand-written code; cleanup registered where data is created.
-
-## 2. Folder structure
-
-```
-api-test-platform/
-├── pom.xml                         single module: platform (main) + automation (test)
-├── Makefile                        shortcuts (make generate / serve / features / test)
-├── Dockerfile, docker-compose.yml  shared approval UI with Postgres audit
-├── .vscode/                        settings.json (Copilot features on), extensions.json
-├── .github/
-│   ├── copilot-instructions.md     repo-wide rules for every Copilot surface
-│   ├── instructions/               path-specific rules (applyTo): java-platform, automation, testcases, features, prompts
-│   ├── agents/                     custom agents (*.agent.md): spec-analyst, test-designer, feature-author,
-│   │                               automation-engineer, rca-analyst, pipeline-orchestrator
-│   ├── skills/                     agent skills (SKILL.md): swagger-to-testcases, testcases-to-features,
-│   │                               run-api-tests, failure-rca, report-rca-tab, add-step-definition, add-api-service
-│   ├── prompts/                    prompt files (VS Code slash commands): /generate-tests /review-status
-│   │                               /build-features /run-tests /rca /pipeline
-│   ├── hooks/guard.json            preToolUse hook → hooks/scripts/guard.py (CLI + cloud agent)
-│   └── workflows/
-│       ├── api-tests.yml           build + unit, spec-change regeneration, nightly/manual runs
-│       └── copilot-setup-steps.yml JDK 17 + Maven + jar for the Copilot cloud agent
-├── prompts/                        versioned LLM prompts (used by Java and by agents)
-├── scripts/
-│   ├── run-tests.sh                tests → RCA → report, exit code = result
-│   └── serve.sh                    approval UI
-├── config/env/{dev,qa,stage}.properties   base URIs, auth profiles, testdata.*
-├── specs/                          put your Swagger/OpenAPI files here (empty in a clean checkout)
-├── testcases/                      generated + reviewed JSON cases (commit this)
-│   └── _proposed/                  agent proposals before `propose` (git-ignored)
-├── history/results.jsonl           run history for flaky / new-failure detection
-├── reports/                        generated report: one self-contained index.html (+ history.json for trends)
-└── src/
-    ├── main/java/com/qa/platform/
-    │   ├── Main.java               `serve` → Spring Boot UI, anything else → CLI
-    │   ├── cli/PlatformCli.java    ingest, generate, status, propose, services, features, rca, report, post-run
-    │   ├── common/                 Json, Hashing, Masking, Workspace, LlmClient, PromptLibrary
-    │   ├── model/                  ApiModel, Endpoint, TestCase, Evidence, RcaEntry (records)
-    │   ├── ingest/                 SpecLoader, ApiModelMapper, IngestService, adapter/{Postman,Markdown}
-    │   ├── generate/               ValueGenerator, CaseFactory, CaseStore, CaseDiffer, rules/*
-    │   ├── approval/               controller, service, security, audit entity, report hosting
-    │   ├── feature/FeatureWriter.java
-    │   ├── rca/                    RcaEngine, RunHistory, LlmRcaEnricher, BugTicketWriter, rules/*
-    │   ├── codegen/                ServiceGenerator (<Tag>Api), StepGenerator (<Tag>Steps), CodegenService
-    │   └── report/ReportRcaMerger.java   adds target/rca/rca.json into reports/index.html
-    ├── main/resources/
-    │   ├── application.yml
-    │   ├── schemas/                testcase.schema.json, rca.schema.json
-    │   └── static/                 approval UI (index.html, app.js, app.css; no build step)
-    └── test/
-        ├── java/com/qa/automation/
-        │   ├── client/             ApiClient (only Rest Assured user), ApiRequest, ApiResponse, auth/ strategies
-        │   ├── api/                BaseApi; generated/<Tag>Api (from the `services` command)
-        │   ├── services/           ServiceFactory (api(Class) for any generated class), OperationService (JSON cases)
-        │   ├── models/             request/response records you add for typed services
-        │   ├── assertions/         ResponseAssert (fluent), SchemaValidator
-        │   ├── steps/              ApiSteps (shared Given/Then); generated/<Tag>Steps (from the `services` command)
-        │   └── runners, hooks, context, support, plugin, config
-        ├── java/org/rg/reporter/   ModernCucumberReporter, ReportContext, HtmlReportWriter, ErrorFactory, SourceIndex, model/
-        ├── java/com/qa/platform/   platform unit tests (mvn test -Punit)
-        └── resources/              testng.xml, cucumber.properties, features/{generated,manual},
-                                    modern-reporter/ui/{app.js, styles.css}  (report UI with the RCA view)
-```
-
-## 3. Setup (once)
-
-Requirements: JDK 17+, Maven 3.9+, Python 3 (for the Copilot guard hook), `jq` (for scripts), optionally Docker.
-
-```bash
-mvn -q test -Punit                 # platform unit tests, no network
-mvn -q -DskipTests package         # builds target/api-test-platform.jar
-```
-
-Edit `config/env/qa.properties`: set `baseUri`, the auth profile, and `testdata.*` ids.
-Secrets go in environment variables referenced as `${VAR}`:
-
-```bash
-export QA_API_TOKEN=...            # or QA_CLIENT_ID / QA_CLIENT_SECRET for oauth2
-```
-
-## 3a. Running inside your company network
-
-Nothing in the code is tied to one company. What changes is configuration, all of it outside Git or behind
-`${ENV_VAR}` references:
-
-| Concern | Where | What to set |
+| Task | Input | Result |
 | --- | --- | --- |
-| Maven can't download (403, timeouts) | `config/maven/settings-company.xml` | `MAVEN_REPO_URL` (+ `MAVEN_REPO_USER`/`PASSWORD`), then `export MAVEN_ARGS="-s config/maven/settings-company.xml"` (or copy it to `~/.m2/settings.xml`, or use the one IT gives you) |
-| Your environment (SIT, UAT, …) | `./scripts/new-env.sh sit` → `config/env/sit.properties` | `baseUri` / `baseUri.<tag>`, `auth.default.*`, `testdata.*` |
-| Corporate proxy | same file | `http.proxy.host/port/user/password/nonProxyHosts` |
-| `PKIX path building failed` | `config/certs/` (git-ignored) | company root CA in `tls.trustStore` (see `config/certs/README.md`) |
-| API gateway needs a client cert (mTLS) | same | `tls.keyStore`, `tls.keyStorePassword` |
-| Gateway keys, tracing headers | same | `http.header.Ocp-Apim-Subscription-Key=${APIM_KEY}`, `http.header.X-Correlation-Id=${uuid}` |
-| Values only for your laptop | `config/env/<env>.local.properties` (git-ignored) | overrides any key of the shared file |
-| Secrets | your shell / CI secrets | `export SIT_API_TOKEN=...`; the files only hold `${SIT_API_TOKEN}` |
-| LLM not allowed / company gateway | env | use your IDE agent (no token), or point `LLM_PROVIDER`/`LLM_BASE_URL` at your approved gateway (section 6a) |
-| Sharing the approval UI | env | default binds to `127.0.0.1`; `BIND_ADDRESS=0.0.0.0` requires real `PLATFORM_USERS` passwords |
+| `spec-audit` | `--spec <file>` | Testability audit under `target/platform/`. |
+| `testcases` | `--spec <file>`, optional `--context` | Validated cases merged into `testcases/` for human review. |
+| `automation` | Approved cases, optional `--tag <tag>` | Generated feature, API and steps files per tag; review and dry-run them. |
+| `rca` | Failure evidence and collected RCA from a run | AI analysis, optional triage/tickets, and an updated report. |
 
-Then check the environment before the first run. It reports missing variables by name (never their values),
-proxy, trust store, client certificate and whether every base URI answers, with a hint per failure:
+`generate --spec <file>` is an alias for the AI test-case task. `--mode auto` selects an LLM
+when the configured provider has a token, otherwise exports for an agent; a token's presence
+does not prove the provider is reachable. A failed LLM call does not automatically invoke an
+IDE agent. Use `--mode agent` to force the IDE workflow, even if an old token is present.
+
+Exporting a task again replaces that task's `target/ai/<task>/` directory, including any
+unapplied answers. Apply or preserve work in progress before starting another export of the
+same task.
+
+For manual agent-mode orchestration:
 
 ```bash
+java -jar target/api-test-platform.jar ai spec-audit \
+  --spec specs/openapi.yaml --mode agent
+```
+
+1. Read `target/ai/spec-audit/requests.md`.
+2. Have the agent answer **each** request in the answer path named there. Automation answers
+   are folders containing the requested files rather than a single text answer.
+3. Apply and inspect the result:
+
+   ```bash
+   java -jar target/api-test-platform.jar ai spec-audit --apply --by copilot-agent
+   ```
+
+4. Fix rejected answers and apply again. Use the same export/answer/apply pattern for
+   `testcases`, `automation`, and `rca`; see `.github/skills/ai-assist/SKILL.md`.
+
+For RCA, run tests and post-run collection first. AI analysis may leave uncovered failures
+`UNCLASSIFIED`; humans should verify all conclusions. The platform validates outputs but
+validation is not a substitute for human review.
+
+## Environments and company networks
+
+Environment files are `config/env/<name>.properties`; `qa` is the default. Set `baseUri`,
+optional `baseUri.<tag>`, auth profiles and `testdata.*` values for your API. Local-only
+overrides can go in the git-ignored `config/env/<name>.local.properties`.
+
+```bash
+./scripts/new-env.sh sit       # copies qa; does not overwrite an existing sit file
+# Edit config/env/sit.properties and export the environment variables it references.
 java -jar target/api-test-platform.jar doctor --env sit
-#  OK   proxy                 http://proxy.company.com:8080, bypass: localhost|*.company.internal
-#  FAIL baseUri               TLS: PKIX path building failed
-#       -> The company CA is not trusted by Java. Export it and set tls.trustStore ...
 ```
 
-The same check is the **Check environment** button in the Execute dialog. The proxy, trust store and client
-certificate apply to every API call and to OAuth token requests.
+Use `${ENV_VAR}` references in configuration rather than committing secrets. The shipped
+`qa.properties` is a Petstore example, not your company's environment.
 
-## 4. Run it, step by step
+| Need | Configuration |
+| --- | --- |
+| HTTP proxy for API calls | `http.proxy.host`, `http.proxy.port`, optional credentials and `http.proxy.nonProxyHosts` in the environment file. |
+| Company CA or mutual TLS for API calls | `tls.trustStore` / `tls.keyStore` and environment-backed passwords; see `config/certs/README.md`. |
+| Gateway or tracing headers | `http.header.<name>`; use environment variables for sensitive values. |
+| Corporate Maven repository | `config/maven/settings-company.xml`, appropriate environment variables, and Maven settings arguments; the UI also supports `PLATFORM_MVN_ARGS`. |
+| LLM proxy / trust | `LLM_PROXY` or `HTTPS_PROXY`, plus Java trust-store settings if needed; LLM networking is separate from API-test settings. |
+
+Keep certificate material and local overrides out of source control. Never set `tls.relaxed=true`
+to bypass a certificate failure. The doctor checks configuration and reachability; it may make
+network requests and cannot prove that every test or permission will succeed.
+
+## Run tests and investigate failures
+
+Generated tests use Cucumber, TestNG and Rest Assured. The UI runs Maven with the selected
+environment, tag expression and threads; the shell alternative is:
 
 ```bash
-JAR=target/api-test-platform.jar
-
-# 1  spec → JSON test cases (file, URL, Postman or Markdown)
-java -jar $JAR ingest   --spec specs/your-api.yaml               # what was found + config keys still missing
-java -jar $JAR generate --spec specs/your-api.yaml               # writes testcases/, keeps approvals
-java -jar $JAR status
-
-# 2  human review
-PLATFORM_USERS="alice:change-me:REVIEWER,bob:change-me:VIEWER" java -jar $JAR serve
-#    open http://localhost:8080 → filter, read, edit, approve / reject (keys: J K A R C)
-
-# 3  approved cases → feature files                              (UI button 1)
-java -jar $JAR features
-
-# 4  <Tag>Api endpoint classes + <Tag>Steps step definitions      (UI button 2)
-java -jar $JAR services --spec specs/your-api.yaml
-mvn -q test -Dcucumber.execution.dry-run=true                    # every step binds
-
-# 5  run + RCA + report                                           (UI buttons 3 and 4)
-./scripts/run-tests.sh qa "@smoke"                               # or: make test ENV=qa TAGS=@smoke
-open reports/index.html#rca                                      # also #dashboard #failures #tests ...
-
-# optional: LLM narrative in the RCA via GitHub Models (category stays rule-based)
-export GITHUB_TOKEN=<PAT with models:read>  ;  java -jar $JAR post-run --llm
-#   LLM_MODEL=openai/gpt-4.1 (default) or any GitHub Models id; LLM_GITHUB_ORG=<org> to bill the org
-#   LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY to call Anthropic directly instead
+./scripts/run-tests.sh qa "@smoke"
+# Optional server-side LLM RCA:
+./scripts/run-tests.sh qa "@smoke" --llm
 ```
 
-Useful filters: `@smoke` (positive cases), `@P1`, `@regression`, `@<tag>` (OpenAPI tag), `@<category>`,
-`@TC-<id>` (one case). Parallelism: `-Dthreads=8`. Evidence for passing tests too: `-Devidence.all=true`.
+`THREADS=8 ./scripts/run-tests.sh qa "@smoke"` overrides script parallelism. The script
+requires generated feature files and `jq`; it runs post-processing after Maven. Inspect the
+Maven output, run summary, and report as well as the script exit status, especially after
+build failures or when old run artifacts exist. The Maven configuration normally ignores
+test failures so post-processing can run; do not treat a bare `mvn test` exit code alone as
+proof that scenarios passed.
 
-## 5. Using it with GitHub Copilot
-
-| Customization | File(s) | VS Code | Copilot CLI | Cloud agent (GitHub.com) |
-| --- | --- | --- | --- | --- |
-| Repo instructions | `.github/copilot-instructions.md` | yes | yes | yes |
-| Path instructions | `.github/instructions/*.instructions.md` | yes | yes | yes |
-| Custom agents | `.github/agents/*.agent.md` | agent picker | `/agent <name>` | agents panel, assign issue |
-| Agent skills | `.github/skills/*/SKILL.md` | auto | auto | auto |
-| Prompt files | `.github/prompts/*.prompt.md` | `/name` | no | no |
-| Hooks | `.github/hooks/guard.json` | preview | yes | yes (default branch) |
-| Environment | `.github/workflows/copilot-setup-steps.yml` | - | - | yes |
-
-**VS Code** (Copilot Chat, agent mode): open the repo, pick an agent in the agent picker or type a prompt file:
-
-| You type | What happens |
-| --- | --- |
-| `/generate-tests specs/orders.yaml` | `spec-analyst` audits the spec; the **Design test cases** handoff runs `test-designer` |
-| `/review-status` | what is waiting for review, what to look at first |
-| `/build-features` | `feature-author` writes features from APPROVED cases and dry-runs them |
-| `/run-tests` (asks env, tags) | runs tests, RCA, report |
-| `/rca` | `rca-analyst` checks root causes against evidence and writes `target/rca/triage.md` |
-| `/pipeline` | `pipeline-orchestrator` runs the agents as subagents, stopping at the human approval gate |
-
-**Copilot CLI**: run `copilot` in the repo, then `/agent spec-analyst` (or any agent) and describe the task, e.g.
-"audit specs/orders.yaml". Skills load automatically; the guard hook runs before every tool call.
-
-**Copilot cloud agent**: create an issue such as "Generate test cases for specs/orders.yaml and propose business
-cases", choose the `test-designer` agent, and assign it to Copilot. It builds with `copilot-setup-steps.yml` and opens
-a PR with the new PENDING_REVIEW cases; reviewers then approve them in the UI. Or "Analyse the failures in the
-attached run" with `rca-analyst`. The cloud agent firewall must allow your API host if the agent should run tests.
-
-Guardrails (`.github/hooks/scripts/guard.py`): agents cannot approve cases, cannot edit `testcases/` except
-`_proposed/`, cannot edit generated features, cannot write literal secrets in `config/env`, cannot `git push` from
-the shell. In VS Code, where hooks are in preview, keep terminal auto-approve off (`.vscode/settings.json`) and
-review each proposed command; the instructions files carry the same rules.
-
-Models: custom agents use the model selected in the Copilot model picker (no `model:` is pinned, so they work on
-every plan); pin one with `model: <name>` in an agent's frontmatter if your organisation standardises on it.
-
-## 6. The report (your Modern Cucumber Reporter) and the RCA view
-
-`org.rg.reporter.ModernCucumberReporter` (in `src/test/java/org/rg/reporter`, UI in
-`src/test/resources/modern-reporter/ui/`) is registered in `ApiTestRunner` as
-`org.rg.reporter.ModernCucumberReporter:reports`, so `mvn test` writes the familiar single-file
-`reports/index.html` (Dashboard, Failures, Tests, Categories, Tags, Analytics, Timeline; trends in `history.json`).
-For API tests:
-- every HTTP call is an **action** step (`ApiClient` → `ReportContext.action`), every check an **expect** step
-  (`ResponseAssert` → `ReportContext.expect`), with the console line `POST /orders -> 500 (123 ms)`
-- failed tests carry `evidence.json` and `reproduce.curl` attachments (masked)
-- project = environment, Environment card shows env, base URI, tags and threads
-
-After the run, `post-run` (or the Execute button) runs the RCA and `ReportRcaMerger` writes `rca` into the page's
-`report-data` JSON. The UI then shows:
-- an **RCA** view (key `3`): root causes grouped by signature, by category / by owner, new failures, confidence,
-  probable cause, suggested fix, affected tests, recent runs, copy cURL / bug ticket / RCA, link to the case in the
-  approval UI when served by it
-- an **RCA** tab in each failed test's drawer and a root-cause callout on its Errors tab; the Failures cards get an
-  RCA button; "Copy prompt" includes the rule-based RCA
-
-Tests are matched to RCA entries through the scenario's `@TC-<id>` tag. Change the look in `styles.css`/`app.js`
-there (see `.github/skills/report-rca-tab/SKILL.md`).
-
-## 6a. AI in the platform (optional): LLM API or your IDE agent
-
-Every AI feature is one task with one validation path. The rules (case generation, RCA categories, owners) and
-the human approval never depend on it.
-
-| Task | What it does | Where it is used |
-| --- | --- | --- |
-| `doc-to-openapi` | API documentation (Markdown/HTML/text) → `specs/<doc>.openapi.yaml`, parsed as OpenAPI before it is written | `ai doc-to-openapi --doc docs/api.md`; importing a doc (CLI or UI) uses the same prompt for sections the rules cannot read |
-| `spec-audit` | testability gaps and questions for the API owner → `target/platform/spec-audit-<spec>.md` | CLI, UI **AI assist**, `/generate-tests` |
-| `testcase-augment` | business cases the rules cannot know → `testcases/` as **Pending review** (schema-checked, never approved) | CLI, UI **AI assist** (with optional business context), `/generate-tests` |
-| `rca-narrative` | sharper summary / cause / fix per root cause (category and owner kept) → `rca.json`, tickets, report | `post-run --llm`, UI Execute checkbox, CLI, `/rca` |
-| `triage-summary` | the triage note → `target/rca/triage.md` | `post-run --llm`, UI Execute checkbox, CLI, `/rca` |
-
-### Way 1: your IDE agent answers (no token, nothing to configure)
-In VS Code Copilot Chat (**Agent** mode) or Claude Code:
-
-```
-/ai testcase-augment --spec specs/orders.yaml      (any task, see the table)
-/rca                                               (after a run: narrative + triage)
-```
-Under the hood: `java -jar target/api-test-platform.jar ai <task> ... --mode agent` writes
-`target/ai/<task>/requests.md`; the agent writes one answer file per request; `ai <task> --apply --by copilot-agent`
-validates and applies them, exactly as for an LLM answer. VS Code tasks "AI task for the agent (export/apply)" do
-the same. Use this when your company allows the coding agent but no separate LLM API.
-
-### Way 2: an LLM API, called by the platform
-Set these in the shell that runs the CLI or starts the approval UI (UI checkbox and **AI assist** buttons then run
-on the server). With no token, `--mode auto` (the default) falls back to Way 1.
-
-| Provider | Variables |
-| --- | --- |
-| GitHub Models (default) | `GITHUB_TOKEN` = PAT with `models:read` (in Actions: `permissions: models: read`); optional `LLM_MODEL=openai/gpt-4.1`, `LLM_GITHUB_ORG=<org>` |
-| Company gateway, OpenAI-compatible (LiteLLM, Kong, Apigee, vLLM, OpenAI) | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://llm-gateway.company.com/v1`, `LLM_API_KEY`, `LLM_MODEL`; `LLM_AUTH_HEADER=api-key` if not `Authorization: Bearer` |
-| Azure OpenAI | `LLM_PROVIDER=azure-openai`, `LLM_BASE_URL=https://<resource>.openai.azure.com`, `LLM_DEPLOYMENT`, `LLM_API_KEY`, optional `LLM_API_VERSION` |
-| Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, optional `LLM_MODEL`, `LLM_BASE_URL` |
+For direct execution:
 
 ```bash
-export LLM_PROVIDER=openai LLM_BASE_URL=https://llm-gateway.company.com/v1 LLM_MODEL=gpt-4.1
-export LLM_API_KEY=...                       # from your vault; never in a file
-java -jar target/api-test-platform.jar ai spec-audit --spec specs/orders.yaml      # --mode llm to require the API
-java -jar target/api-test-platform.jar post-run --llm                             # narrative + triage after a run
+mvn test -Denv=qa -Dcucumber.filter.tags="@smoke" -Dthreads=4
+java -jar target/api-test-platform.jar post-run
 ```
-Company network: `LLM_PROXY=http://proxy:8080` (else `HTTPS_PROXY`); a gateway with an internal certificate needs
-the company CA in Java's trust store (`JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=... -Djavax.net.ssl.trustStorePassword=..."`).
-Everything sent is masked first; a failed call leaves the rule-based result untouched.
 
-## 7. CI
+Add `--llm` to `post-run` for configured API-based RCA, or use agent-mode `rca` after
+post-run. The test runner writes evidence to `target/evidence/`, a run summary to
+`target/run-summary.json`, and the report to `reports/index.html`. Post-processing collects
+failures in `target/rca/` and merges RCA into the report. Open `reports/index.html#rca` or
+use **Open report** in the UI.
 
-`.github/workflows/api-tests.yml`:
-- every push/PR: unit tests + jar
-- PR that changes `specs/`: regenerates cases so reviewers see what changed
-- nightly and manual (`env`, `tags` inputs): features → tests → RCA → report artifact, run history cached,
-  top root causes in the job summary
+Scenario case IDs are represented by `@TC-...` tags and connect evidence to cases. Treat
+evidence, reports, and reproduced requests as potentially sensitive even where masking is
+applied; review before sharing.
 
-Secrets to configure: `QA_API_TOKEN` (or your auth vars). For the LLM narrative set the repository variable
-`LLM_ENABLED=true` (optional `LLM_MODEL`); the workflow's `models: read` permission lets `GITHUB_TOKEN` call GitHub
-Models, so no extra key is needed.
+## CLI reference
 
-## 8. Extending
+```bash
+java -jar target/api-test-platform.jar --help
+java -jar target/api-test-platform.jar status
+java -jar target/api-test-platform.jar generate --spec specs/openapi.yaml --mode agent
+java -jar target/api-test-platform.jar ai automation --tag pet --mode agent
+java -jar target/api-test-platform.jar doctor --env qa
+java -jar target/api-test-platform.jar post-run
+```
 
-| To add | Do this |
+| Command | Purpose |
 | --- | --- |
-| a test category | class in `generate/rules/`, register in `CaseGenerator`, add to the schema enum, unit test |
-| an RCA category | class in `rca/rules/`, register in `RcaEngine`, add to `rca.schema.json`, unit test |
-| a step | per operation: generated by `services` (never edit `steps/generated/`); generic check: `steps/ApiSteps.java` (and `FeatureWriter`); business flow: a domain `*Steps` class backed by a service |
-| typed calls for an API | `java -jar target/api-test-platform.jar services --spec <spec>` (Api + Steps), then a `*Service` + models (skill `add-api-service`) |
-| an auth type | a class in `client/auth/` implementing `AuthProvider`, registered in `AuthProviders`, + example in `config/env/qa.properties` |
-| an input format | implement `ingest/adapter/DocAdapter`, register in `IngestService` |
+| `serve` | Start the approval UI. |
+| `generate` | Start AI test-case generation for a local spec or document. |
+| `ai <task>` | Run or export `testcases`, `spec-audit`, `automation`, or `rca`; `--apply` applies exported agent answers. |
+| `status` | Count cases by status and category. |
+| `propose --file <json>` | Import proposed cases as pending review. |
+| `doctor --env <name>` | Check environment configuration and reachability. |
+| `rca`, `report`, `post-run` | Collect failures, merge RCA into the report, or do both. |
 
-## 9. Status of this scaffold
+`scripts/new-spec.sh <file> [env]` copies a local spec into `specs/`, builds the jar if
+missing, and starts generation. Its generation command is allowed to fail without stopping
+the script: check its output and complete any agent request before expecting cases. Although
+the script accepts a URL argument, the current CLI test-case task expects a local file; use
+the UI URL import or download an authorized spec to a local file first.
 
-Written as production-grade code but **not yet compiled against Maven Central** (it was authored offline).
-Expect a short first-build pass: run `mvn -q test -Punit`, fix any compile errors, and check the expected
-counts in `GeneratorTest` against `src/test/resources/fixtures/sample-api.yaml`. The approval UI and the report were rendered and
-checked in a browser with sample data (report: RCA view, RCA tab, failures; UI: pipeline bar and Execute dialog);
-generated `<Tag>Api`/`<Tag>Steps` were compiled against the project's own classes; the Copilot guard hook was tested with Copilot CLI/cloud-agent and
-VS Code payloads for allowed and blocked actions.
+The `Makefile` provides shortcuts including `build`, `unit`, `serve`, `automation`, `test`,
+and `report`. Inspect the target before relying on optional arguments.
+
+## Docker and CI
+
+The supplied `docker-compose.yml` runs a UI container with PostgreSQL for audit events and
+mounts the workspace. Build the jar first; provide `DB_PASSWORD` and `PLATFORM_USERS` securely
+in the Compose environment before running `docker compose up --build`.
+
+The supplied image contains a JRE, **not Maven**, and the Compose file does not pass LLM
+settings into the UI container. Consequently, UI test execution and server-side AI require
+additional deployment configuration: provide Maven in the container and explicitly pass
+approved LLM settings/secrets to it. Setting variables only on the host does not automatically
+make them available inside the container. Review port exposure, TLS, credentials and database
+security before sharing a deployment.
+
+`.github/workflows/api-tests.yml` builds and unit-tests on pushes and pull requests, has a
+PR spec-generation job, and runs committed automation on non-PR events with report artifacts.
+The PR job has no configured LLM provider/token, so it can export agent requests rather than
+generate cases automatically. The API-test job currently hard-codes the retired GitHub Models
+provider; do not enable its LLM RCA as-is. Configure an approved provider and secrets in the
+workflow before relying on server-side AI in CI. The workflow is not updated merely by changing
+your local shell. `.github/workflows/copilot-setup-steps.yml` prepares the Copilot cloud-agent
+environment.
+
+## Project structure and extensions
+
+| Path | Purpose |
+| --- | --- |
+| `specs/`, `testcases/` | API inputs and reviewable case JSON. |
+| `prompts/` | Versioned AI task prompts. |
+| `src/main/java/com/qa/platform/ai/` | AI task export, validation and application. |
+| `src/main/java/com/qa/platform/approval/` | Approval API, UI services and test-run orchestration. |
+| `src/main/java/com/qa/platform/generate/` | Case storage, merging and proposal import. |
+| `src/main/java/com/qa/platform/rca/`, `report/` | Failure collection, history and report merge. |
+| `src/test/java/com/qa/automation/` | Client, auth, API, services, steps, assertions and runner. |
+| `src/test/resources/features/generated/` | AI-generated feature files for approved cases. |
+| `src/test/java/org/rg/reporter/`, `src/test/resources/modern-reporter/ui/` | HTML reporter and its UI. |
+| `.github/agents/`, `.github/skills/`, `.github/prompts/` | Project-specific Copilot agents, skills and prompt files. |
+| `config/env/`, `scripts/` | Environment configuration and local workflow scripts. |
+
+Automation follows **steps -> services/API -> ApiClient -> Rest Assured**. Generated endpoint
+and step classes live in `api/generated/` and `steps/generated/`; keep reusable business logic
+in hand-written services and steps. For a new auth strategy, add an `AuthProvider` and register
+it in `AuthProviders`. For shared steps or report changes, follow the corresponding project
+instructions and skills. Review generated content and keep assertions faithful to approved cases.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| UI says no LLM token | Set a supported provider and its key in the server's environment, restart the UI, or use Copilot agent mode. The UI does not use the Copilot session token. |
+| LLM call fails even though a token is present | Check `[llm]` output, provider URL, model, permissions, proxy, CA trust and company policy. Token presence is not a connectivity check. |
+| No approved cases | Have a human review and approve appropriate cases in the UI before generating automation. |
+| Agent export exists but no cases or code appear | Complete every answer in the exported requests file and run the matching `ai <task> --apply`; inspect rejections. |
+| Dry run reports undefined or ambiguous steps | Review generated steps and shared definitions; correct the automation and rerun the dry run without weakening assertions. |
+| Certificate or connectivity errors | Run `doctor --env <name>`, check proxy and CA configuration, and fix trust rather than disabling TLS verification. |
+| RCA is unclassified | Run post-processing first; then use configured LLM RCA or the agent RCA workflow, and review the evidence and any rejected answers. |
+| UI/container cannot run Maven | Verify Maven is installed and accessible to the UI process; the supplied Docker image is JRE-only. |

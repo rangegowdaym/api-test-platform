@@ -12,31 +12,23 @@
   <div class="counters" id="counters"></div>
   <div class="top-actions">
     <button id="btn-import" class="ghost">Import spec</button>
-    <button id="btn-ai" class="ghost" title="AI tasks: business cases, spec audit, RCA narrative, triage">AI assist</button>
+    <button id="btn-ai" class="ghost" title="AI tasks: test cases, spec audit, root cause analysis">AI assist</button>
     <span class="user" id="user"></span>
   </div>
 </header>
 
-<!-- Pipeline: the same deterministic code as the CLI commands (features, services, mvn test + post-run). -->
+<!-- Pipeline: 1 AI automation (ai automation) -> 2 mvn test + RCA -> 3 report. Same as the CLI. -->
 <nav class="pipeline" aria-label="Pipeline">
   <div class="pstep" id="ps-features">
     <span class="pnum">1</span>
     <div class="pbody">
-      <button id="btn-features" class="primary">Generate features</button>
-      <div class="pstatus" id="st-features">Approved cases only &rarr; src/test/resources/features/generated</div>
-    </div>
-  </div>
-  <div class="parrow" aria-hidden="true">&rarr;</div>
-  <div class="pstep" id="ps-services">
-    <span class="pnum">2</span>
-    <div class="pbody">
-      <button id="btn-services">Generate services &amp; steps</button>
-      <div class="pstatus" id="st-services">&lt;Tag&gt;Api + &lt;Tag&gt;Steps for the feature files</div>
+      <button id="btn-features" class="primary">Generate automation (AI)</button>
+      <div class="pstatus" id="st-features">AI writes feature files, &lt;Tag&gt;Api and &lt;Tag&gt;Steps for the approved cases; review the diff</div>
     </div>
   </div>
   <div class="parrow" aria-hidden="true">&rarr;</div>
   <div class="pstep" id="ps-run">
-    <span class="pnum">3</span>
+    <span class="pnum">2</span>
     <div class="pbody">
       <button id="btn-run">Execute tests&hellip;</button>
       <div class="pstatus" id="st-run">Pick environment and tags</div>
@@ -44,7 +36,7 @@
   </div>
   <div class="parrow" aria-hidden="true">&rarr;</div>
   <div class="pstep" id="ps-report">
-    <span class="pnum">4</span>
+    <span class="pnum">3</span>
     <div class="pbody">
       <a id="btn-report" class="link" href="/reports/index.html#dashboard" target="_blank" rel="noopener">Open report</a>
       <div class="pstatus" id="st-report">Dashboard, failures and RCA</div>
@@ -106,7 +98,7 @@
     <div id="d-notes"></div>
     <div class="tabs">
       <button class="tab active" data-tab="overview">Overview</button>
-      <button class="tab" data-tab="gherkin">Scenario</button>
+      <button class="tab" data-tab="gherkin">Scenario (draft)</button>
       <button class="tab" data-tab="json">Edit JSON</button>
       <button class="tab" data-tab="history">History</button>
     </div>
@@ -134,10 +126,13 @@
 <dialog id="import-dialog">
   <form method="dialog" id="import-form">
     <h2>Import a spec or API doc</h2>
-    <p class="muted">Swagger 2 / OpenAPI 3 (YAML or JSON), Postman collection, or Markdown/HTML API doc.
-      Existing approvals are kept for cases that did not change.</p>
-    <label>File <input type="file" id="import-file" accept=".yaml,.yml,.json,.md,.markdown,.html,.htm"></label>
+    <p class="muted">Swagger 2 / OpenAPI 3 (YAML or JSON), Postman collection, or any API doc (Markdown, HTML, text).
+      The AI designs the test cases; they arrive as Pending review. Approvals are kept while the spec is unchanged.</p>
+    <label>File <input type="file" id="import-file" accept=".yaml,.yml,.json,.md,.markdown,.html,.htm,.txt"></label>
     <label>or URL <input type="url" id="import-url" placeholder="https://service/v3/api-docs"></label>
+    <label>Business context for the AI (optional)
+      <textarea id="import-context" rows="3" maxlength="4000" style="min-height:0;height:64px" placeholder="e.g. orders over 10,000 need approval; a cancelled order cannot be changed"></textarea>
+    </label>
     <div class="dialog-actions">
       <button value="cancel" class="ghost">Cancel</button>
       <button id="import-go" value="default" class="primary">Import</button>
@@ -171,8 +166,8 @@
       </label>
       <div class="row2">
         <label>Threads <input id="run-threads" type="number" min="1" max="16" value="4"></label>
-        <label class="inline llm hidden" id="run-llm-row"><input type="checkbox" id="run-llm"> LLM narrative for the RCA</label>
-        <span class="llm-note hidden" id="run-llm-note">RCA narrative: rule-based. For an AI narrative without a token, run <b>/rca</b> in Copilot agent mode after the run.</span>
+        <label class="inline llm hidden" id="run-llm-row"><input type="checkbox" id="run-llm"> AI root cause analysis (LLM)</label>
+        <span class="llm-note hidden" id="run-llm-note">No LLM token: failures are collected as UNCLASSIFIED. For the AI root cause analysis run <b>/rca</b> in Copilot agent mode after the run.</span>
       </div>
       <div class="error" id="run-error"></div>
       <div class="dialog-actions">
@@ -199,16 +194,15 @@
     <h2>AI assist</h2>
     <p class="muted" id="ai-status">Checking the LLM configuration&hellip;</p>
     <label>Spec <select id="ai-spec"></select></label>
-    <label>Business context for new cases (optional)
+    <label>Business context for the test cases (optional)
       <textarea id="ai-context" rows="3" maxlength="4000" placeholder="e.g. orders over 10,000 need approval; a cancelled order cannot be changed"></textarea>
     </label>
     <div class="ai-actions">
-      <button type="button" data-ai="testcase-augment" class="primary">Propose business cases</button>
+      <button type="button" data-ai="testcases" class="primary">Generate test cases (AI)</button>
       <button type="button" data-ai="spec-audit">Audit spec</button>
-      <button type="button" data-ai="rca-narrative">Rewrite RCA narrative</button>
-      <button type="button" data-ai="triage-summary">Triage summary</button>
+      <button type="button" data-ai="rca">AI root cause analysis (last run)</button>
     </div>
-    <pre class="ai-out mono" id="ai-out">Proposed cases arrive as Pending review: you still approve every one.</pre>
+    <pre class="ai-out mono" id="ai-out">AI-designed cases arrive as Pending review: you approve every one.</pre>
     <div class="dialog-actions"><button type="button" class="ghost" id="ai-close">Close</button></div>
   </form>
 </dialog>

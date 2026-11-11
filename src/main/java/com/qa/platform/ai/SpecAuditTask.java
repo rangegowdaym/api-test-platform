@@ -22,8 +22,9 @@ final class SpecAuditTask implements AiTask {
   public String describe() { return "Audit " + spec + " for testability gaps -> target/platform/spec-audit-<spec>.md."; }
 
   public List<AiRequest> requests() throws Exception {
-    SpecText.Spec s = SpecText.load(spec, 60000);
-    return List.of(new AiRequest(s.model().specName(), "spec-audit", Map.of("spec", s.text())));
+    Path f = Files.exists(Path.of(spec)) ? Path.of(spec) : Workspace.SPECS.resolve(spec);
+    if (!Files.exists(f)) throw new IllegalArgumentException("No such spec: " + spec);
+    return List.of(new AiRequest(f.getFileName().toString(), "spec-audit", Map.of("spec", SpecText.read(f, 100000))));
   }
 
   public String apply(AiRequest request, String answer, String by) throws Exception {
