@@ -15,7 +15,7 @@ Java 17 Maven project with a CLI, an approval UI, an automation framework, and o
 - [Quick start: VS Code Copilot agent](#quick-start-vs-code-copilot-agent)
 - [Use an LLM API from the UI or CLI](#use-an-llm-api-from-the-ui-or-cli)
 - [Approval UI](#approval-ui)
-- [AI tasks and agent mode](#ai-tasks-and-agent-mode)
+- [AI tasks](#ai-tasks)
 - [Environments and company networks](#environments-and-company-networks)
 - [Run tests and investigate failures](#run-tests-and-investigate-failures)
 - [CLI reference](#cli-reference)
@@ -49,10 +49,13 @@ API spec / doc
                         failure collection + optional AI RCA
 ```
 
-The CLI can use either an IDE agent or an LLM API. The browser UI does **not** call the VS Code
-Copilot session: its AI buttons call an LLM API configured on the server. If no server-side LLM
-is configured, use Copilot agent mode separately for AI tasks and return to the UI for review
-and execution.
+**One AI path, two ways to answer.** Every AI step (UI button, CLI command, after a test run) is an
+*AI task*. If an LLM API key is configured on the machine running the platform, the platform calls it
+and applies the answer straight away. If not (or if the call fails), the task is **queued** and the
+UI shows *Waiting for Copilot*: type `/ai` in VS Code Copilot Chat (Agent mode) and Copilot answers
+every queued task with the same prompts; the platform validates the answers exactly as it validates
+LLM answers, and the UI refreshes when they are applied. Humans only approve test cases (and review
+what the AI wrote).
 
 Cases are stored as JSON under `testcases/`; the UI also stores review events in a database.
 Regeneration merges cases for the same spec: new and changed cases are pending review, unchanged
@@ -63,7 +66,7 @@ cases and custom cases receive special protection during merging. Review the res
 
 - JDK 17 and Maven; Maven 3.9+ supports the documented `MAVEN_ARGS` environment variable.
 - `bash` and `jq` for the supplied shell scripts; Python 3 for the Copilot guard hook.
-- Optional: VS Code with Copilot agent mode, or an approved LLM API; Docker for the container setup.
+- VS Code with Copilot agent mode, and/or an approved LLM API key; Docker for the container setup (optional).
 - Network access to the target API is required when running API tests or the environment doctor.
 
 From the project directory:
@@ -79,32 +82,24 @@ replace them or add your own under `specs/`.
 
 ## Quick start: VS Code Copilot agent
 
-This path needs a configured Copilot agent in VS Code but **no separate platform LLM API key**.
-Commands below use the included `specs/openapi.yaml` as an example; use your own spec and an
-authorized test environment for real work.
+This path needs Copilot agent mode in VS Code and **no LLM API key**. Every AI step is queued for
+Copilot; `/ai` (`.github/prompts/ai.prompt.md`) answers whatever is queued.
 
-### 1. Audit and design cases
+1. **Test cases.** In the UI use **Import spec** (or `java -jar target/api-test-platform.jar generate
+   --spec specs/openapi.yaml`). The UI shows *Waiting for Copilot*. In Copilot Chat (**Agent** mode)
+   type `/ai`. When Copilot has applied its answer, the cases appear in the UI as **PENDING_REVIEW**.
+2. **Review.** Approve or reject the cases in the UI (start it as below). This is the human gate.
+3. **Automation.** Click **Generate automation (AI)**, then `/ai` again. Review the generated feature,
+   `<Tag>Api` and `<Tag>Steps` (`git diff`) and run `mvn -q test -Dcucumber.execution.dry-run=true`.
+4. **Run.** **Execute tests** in the UI (or `./scripts/run-tests.sh qa "@pet"`). Failures are queued
+   for the AI root cause analysis: `/ai` analyses them and heals automation/test-data faults (for
+   example a scenario that needs a pet to exist now creates it), then re-runs once.
+   API bugs are never "healed": they stay failures with an owner in `reports/index.html#rca`.
 
-In Copilot Chat, select **Agent** mode and ask:
+`/pipeline` does the whole flow and stops at the review gate. `java -jar target/api-test-platform.jar
+status` always prints what is queued and the next step.
 
-```text
-Use the ai-assist workflow to audit specs/openapi.yaml for testability.
-```
-
-Review the audit in `target/platform/spec-audit-openapi.yaml.md`, resolve important questions
-with the API owner, and then ask:
-
-```text
-Use the ai-assist workflow to design test cases for specs/openapi.yaml.
-```
-
-The `/ai` prompt in `.github/prompts/ai.prompt.md` can also be used to select `spec-audit` or
-`testcases` and supply `--spec specs/openapi.yaml`. The agent exports requests, answers them,
-and applies validated results. New cases are **PENDING_REVIEW**, not approved.
-
-### 2. Start the UI and review cases
-
-Set a local reviewer password without placing it in shell history or a project file:
+Start the UI with your own reviewer password, kept out of shell history and project files:
 
 ```bash
 printf 'Choose a local reviewer password: '
@@ -115,58 +110,24 @@ unset REVIEWER_PASSWORD
 ./scripts/serve.sh
 ```
 
-Open [http://localhost:8080](http://localhost:8080), sign in as `reviewer`, and review the
-pending cases. A human must approve the cases to automate. See [Approval UI](#approval-ui)
-for roles and security considerations.
-
-### 3. Generate and review automation
-
-In Copilot Chat, ask:
-
-```text
-Use the ai-assist workflow to generate automation for the approved test cases.
-```
-
-Alternatively, use `/ai` with task `automation`, optionally specifying `--tag pet`. The agent
-generates the feature, API class, and step class through the platform's agent apply workflow.
-Review all generated files and assertions; in a Git checkout, use `git diff` as well. Then run:
-
-```bash
-mvn -q test -Dcucumber.execution.dry-run=true
-```
-
-The dry run compiles the automation and checks that steps bind; it does not prove that API
-responses or assertions are correct.
-
-### 4. Configure and run
-
-Edit `config/env/qa.properties` for the actual API URL, auth profile, and required test data.
-The checked-in QA example points to the public Petstore, so do not run it unintentionally.
-Use environment variables for real secrets.
-
-```bash
-java -jar target/api-test-platform.jar doctor --env qa
-./scripts/run-tests.sh qa "@smoke"
-```
-
-Check `reports/index.html` and the run output. If there are failures, ask the agent to use the
-`ai-assist` RCA workflow, or use `/rca`; review its conclusions against the evidence. The UI can
-also run the tests and open the report.
+Open [http://localhost:8080](http://localhost:8080) and sign in as `reviewer`. See
+[Approval UI](#approval-ui) for roles and security considerations. Edit `config/env/qa.properties`
+for your API before running real tests (the checked-in QA example points to the public Petstore).
 
 ## Use an LLM API from the UI or CLI
 
-Use this route if an approved server-side LLM should handle the UI's **Import spec**,
-**AI assist**, **Generate automation (AI)**, or optional AI RCA. Set the variables in the
-environment that starts the UI server; the browser does not pass its Copilot credentials to it.
-Restart the UI after changing the server environment.
+With an LLM API key the platform answers every AI task itself (UI buttons, CLI, after each run,
+including heal + re-run) and nothing waits for Copilot. Set the variables in the environment that
+starts the UI server or runs the CLI, and restart the UI after changing them. Copilot still works
+alongside it: anything the LLM cannot answer (network, quota, outage) is queued for `/ai`.
 
-### Important: GitHub Models retirement
+### Which provider is used
 
-The current code defaults `LLM_PROVIDER` to `github-models` and can read `GITHUB_MODELS_TOKEN`
-or `GITHUB_TOKEN`, but [GitHub Models was retired on July 30, 2026](https://docs.github.com/en/github-models).
-Those settings do not make the retired inference API available. A GitHub Copilot subscription or
-VS Code session token is not a substitute for an LLM API key. Explicitly choose a supported
-provider or use agent mode.
+`LLM_PROVIDER` is optional: the platform follows the key you set (`LLM_API_KEY` or `OPENAI_API_KEY`
+→ OpenAI-compatible, `ANTHROPIC_API_KEY` → Anthropic, `AZURE_OPENAI_API_KEY` → Azure OpenAI). With
+no key, Copilot answers. GitHub Models was retired on July 30, 2026 and is not supported; a
+`GITHUB_TOKEN` or the Copilot session is never used as an LLM key. `LLM_ENABLED=false` keeps a key
+unused (everything goes to Copilot).
 
 ### Company OpenAI-compatible gateway
 
@@ -174,7 +135,6 @@ Obtain an approved gateway base URL, model ID, API key, and authentication-heade
 from your platform team. Confirm what data may be sent to the provider.
 
 ```bash
-export LLM_PROVIDER=openai
 export LLM_BASE_URL="https://your-approved-gateway.example.com/v1"
 export LLM_MODEL="your-model-id"
 
@@ -192,13 +152,13 @@ headers the key is sent without the `Bearer` prefix.
 To check the integration using an authorized, non-sensitive spec:
 
 ```bash
+java -jar target/api-test-platform.jar status          # "AI answers: openai:<model>"
 java -jar target/api-test-platform.jar ai spec-audit \
   --spec specs/openapi.yaml --mode llm
 ```
 
-This performs an external API call and writes an audit if accepted. `--mode llm` requires a
-configured key; inspect `[llm]` errors and rejected results rather than assuming success. Then
-set `PLATFORM_USERS` as shown above and start `./scripts/serve.sh` in the same terminal.
+`--mode llm` forces the API (no Copilot fallback) so you see `[llm]` errors directly. Then set
+`PLATFORM_USERS` as shown above and start `./scripts/serve.sh` in the same terminal.
 
 ### Other supported client configurations
 
@@ -208,8 +168,8 @@ set `PLATFORM_USERS` as shown above and start `./scripts/serve.sh` in the same t
 | Azure OpenAI | `LLM_PROVIDER=azure-openai`, `LLM_BASE_URL`, `LLM_DEPLOYMENT`, `LLM_API_KEY` | Base URL is the resource URL; optional `LLM_API_VERSION` defaults to `2024-10-21`. `AZURE_OPENAI_API_KEY` is a fallback. |
 | Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, `LLM_MODEL` | `LLM_API_KEY` is a fallback; optional `LLM_BASE_URL` defaults to `https://api.anthropic.com`. Set an available model explicitly. |
 
-`LLM_PROXY` controls the LLM client's proxy; otherwise it checks `HTTPS_PROXY` / `https_proxy`
-and then the JVM default. A gateway using a private CA may require a Java trust store. Do not
+`LLM_PROXY` controls the LLM client's proxy (`none` = direct); otherwise it uses `HTTPS_PROXY` /
+`https_proxy`. Hosts in `NO_PROXY` (e.g. `.corp.example.com`) and localhost are called directly. A gateway using a private CA may require a Java trust store. Do not
 disable TLS verification to work around certificate errors.
 
 AI inputs are processed by masking code, but masking is not a guarantee that every sensitive
@@ -228,80 +188,38 @@ your organization's authentication and deployment policies before sharing it.
 
 | UI action | Behavior |
 | --- | --- |
-| Import spec | Upload a supported file or supply a URL and optional context. With a server LLM, it proposes cases. Without one, the saved spec and agent-mode instructions are returned instead. |
+| Import spec | Upload a file or a URL plus optional business context. The AI designs the cases (LLM now, or queued for Copilot `/ai`); they arrive as Pending review. |
 | Review cases | Filter and inspect cases, edit JSON, approve, reject, or request changes. Editing returns a case to review. |
-| AI assist | Runs supported test-case, spec-audit, and RCA tasks using the server LLM; without a token it provides agent-mode guidance. |
-| Generate automation (AI) | Requires approved cases and a configured server LLM. Writes automation for review; it does not invoke VS Code Copilot. |
-| Execute tests | Select environment, tags and thread count; optionally check the environment and enable server-side AI RCA. |
+| AI assist | Any AI task: test cases, spec audit, automation, RCA, heal. Same behaviour: LLM now, or queued for Copilot. |
+| Generate automation (AI) | Feature + `<Tag>Api` + `<Tag>Steps` for the approved cases; review the diff. |
+| Execute tests | Environment, tags, threads, **AI root cause analysis** (on by default) and **AI heal + re-run** (LLM key needed; without one `/ai` heals after the run). |
+| *Waiting for Copilot* bar | AI tasks queued for Copilot. Type `/ai` in Copilot Chat; **Apply answers** applies answers Copilot wrote but did not apply. The AI chip in the header shows who answers. |
 | Open report | Opens the HTML report and its RCA view. |
 
 `VIEWER` access is read-only; reviewers perform changes and start runs. By default review
 events use an H2 database at `target/platform/approval-db`. Set `DB_URL`, `DB_USER`, and
 `DB_PASSWORD` for a PostgreSQL-backed audit database. Cases remain in files.
 
-## AI tasks and agent mode
+## AI tasks
 
-| Task | Input | Result |
-| --- | --- | --- |
-| `spec-audit` | `--spec <file>` | Testability audit under `target/platform/`. |
-| `testcases` | `--spec <file>`, optional `--context` | Validated cases merged into `testcases/` for human review. |
-| `automation` | Approved cases, optional `--tag <tag>` | Generated feature, API and steps files per tag; review and dry-run them. |
-| `rca` | Failure evidence and collected RCA from a run | AI analysis, optional triage/tickets, and an updated report. |
-
-`generate --spec <file>` is an alias for the AI test-case task. `--mode auto` selects an LLM
-when the configured provider has a token, otherwise exports for an agent; a token's presence
-does not prove the provider is reachable. A failed LLM call does not automatically invoke an
-IDE agent. Use `--mode agent` to force the IDE workflow, even if an old token is present.
-
-Exporting a task again replaces that task's `target/ai/<task>/` directory, including any
-unapplied answers. Apply or preserve work in progress before starting another export of the
-same task.
-
-For manual agent-mode orchestration:
+| Task | Input | AI decides | Validated on apply |
+| --- | --- | --- | --- |
+| `testcases` | `--spec <file>`, optional `--context` | every test case | schema; always PENDING_REVIEW; approvals kept |
+| `spec-audit` | `--spec <file>` | testability gaps, owner questions | written to `target/platform/` |
+| `automation` | approved cases, optional `--tag` | feature, `<Tag>Api`, `<Tag>Steps`, assertions, data setup | fixed paths/packages; one scenario per approved case with its approved status; no forbidden calls |
+| `rca` | the last run | category, owner, grouping, fix, tickets, triage | known categories; counts from evidence |
+| `heal` | the last run's TEST_DATA / TEST_DEFECT / unanalysed failures | automation fixes (or "API bug, no change") | as automation: an expectation can never be dropped or changed |
 
 ```bash
-java -jar target/api-test-platform.jar ai spec-audit \
-  --spec specs/openapi.yaml --mode agent
+java -jar target/api-test-platform.jar ai <task> [--spec f] [--tag t]   # LLM now, else queued for Copilot
+java -jar target/api-test-platform.jar ai pending                       # what is waiting for Copilot
+java -jar target/api-test-platform.jar ai apply                         # apply the answers Copilot wrote
 ```
 
-1. Read `target/ai/spec-audit/requests.md`.
-2. Have the agent answer **each** request in the answer path named there. Automation answers
-   are folders containing the requested files rather than a single text answer.
-3. Apply and inspect the result:
-
-   ```bash
-   java -jar target/api-test-platform.jar ai spec-audit --apply --by copilot-agent
-   ```
-
-4. Fix rejected answers and apply again. Use the same export/answer/apply pattern for
-   `testcases`, `automation`, and `rca`; see `.github/skills/ai-assist/SKILL.md`.
-
-For RCA, run tests and post-run collection first. AI analysis may leave uncovered failures
-`UNCLASSIFIED`; humans should verify all conclusions. The platform validates outputs but
-validation is not a substitute for human review.
-
-## Environments and company networks
-
-Environment files are `config/env/<name>.properties`; `qa` is the default. Set `baseUri`,
-optional `baseUri.<tag>`, auth profiles and `testdata.*` values for your API. Local-only
-overrides can go in the git-ignored `config/env/<name>.local.properties`.
-
-```bash
-./scripts/new-env.sh sit       # copies qa; does not overwrite an existing sit file
-# Edit config/env/sit.properties and export the environment variables it references.
-java -jar target/api-test-platform.jar doctor --env sit
-```
-
-Use `${ENV_VAR}` references in configuration rather than committing secrets. The shipped
-`qa.properties` is a Petstore example, not your company's environment.
-
-| Need | Configuration |
-| --- | --- |
-| HTTP proxy for API calls | `http.proxy.host`, `http.proxy.port`, optional credentials and `http.proxy.nonProxyHosts` in the environment file. |
-| Company CA or mutual TLS for API calls | `tls.trustStore` / `tls.keyStore` and environment-backed passwords; see `config/certs/README.md`. |
-| Gateway or tracing headers | `http.header.<name>`; use environment variables for sensitive values. |
-| Corporate Maven repository | `config/maven/settings-company.xml`, appropriate environment variables, and Maven settings arguments; the UI also supports `PLATFORM_MVN_ARGS`. |
-| LLM proxy / trust | `LLM_PROXY` or `HTTPS_PROXY`, plus Java trust-store settings if needed; LLM networking is separate from API-test settings. |
+`generate --spec <file>` is the same as `ai testcases`. `--mode llm` or `--mode agent` force one way.
+Queuing a task again replaces that task's unapplied queue in `target/ai/<task>/`. Prompts are in
+`prompts/`; the answer protocol for Copilot is `.github/skills/ai-assist/SKILL.md`. The platform
+validates every answer, but validation is not a substitute for human review.
 
 Keep certificate material and local overrides out of source control. Never set `tls.relaxed=true`
 to bypass a certificate failure. The doctor checks configuration and reachability; it may make
@@ -314,8 +232,8 @@ environment, tag expression and threads; the shell alternative is:
 
 ```bash
 ./scripts/run-tests.sh qa "@smoke"
-# Optional server-side LLM RCA:
-./scripts/run-tests.sh qa "@smoke" --llm
+# AI heals automation/test-data failures, then the tests run once more:
+./scripts/run-tests.sh qa "@smoke" --heal
 ```
 
 `THREADS=8 ./scripts/run-tests.sh qa "@smoke"` overrides script parallelism. The script
@@ -332,8 +250,8 @@ mvn test -Denv=qa -Dcucumber.filter.tags="@smoke" -Dthreads=4
 java -jar target/api-test-platform.jar post-run
 ```
 
-Add `--llm` to `post-run` for configured API-based RCA, or use agent-mode `rca` after
-post-run. The test runner writes evidence to `target/evidence/`, a run summary to
+`post-run` runs the AI RCA (LLM, or queued for `/ai`); add `--heal` for the heal task, `--no-ai` to
+only collect the facts. The test runner writes evidence to `target/evidence/`, a run summary to
 `target/run-summary.json`, and the report to `reports/index.html`. Post-processing collects
 failures in `target/rca/` and merges RCA into the report. Open `reports/index.html#rca` or
 use **Open report** in the UI.
@@ -347,8 +265,10 @@ applied; review before sharing.
 ```bash
 java -jar target/api-test-platform.jar --help
 java -jar target/api-test-platform.jar status
-java -jar target/api-test-platform.jar generate --spec specs/openapi.yaml --mode agent
-java -jar target/api-test-platform.jar ai automation --tag pet --mode agent
+java -jar target/api-test-platform.jar generate --spec specs/openapi.yaml
+java -jar target/api-test-platform.jar ai automation --tag pet
+java -jar target/api-test-platform.jar ai pending
+java -jar target/api-test-platform.jar ai apply
 java -jar target/api-test-platform.jar doctor --env qa
 java -jar target/api-test-platform.jar post-run
 ```
@@ -357,11 +277,11 @@ java -jar target/api-test-platform.jar post-run
 | --- | --- |
 | `serve` | Start the approval UI. |
 | `generate` | Start AI test-case generation for a local spec or document. |
-| `ai <task>` | Run or export `testcases`, `spec-audit`, `automation`, or `rca`; `--apply` applies exported agent answers. |
-| `status` | Count cases by status and category. |
+| `ai <task>` | Run `testcases`, `spec-audit`, `automation`, `rca` or `heal` (LLM, else queued); `ai pending`, `ai apply`. |
+| `status` | Cases by status and category, who answers AI tasks, the queue, and the next step. |
 | `propose --file <json>` | Import proposed cases as pending review. |
 | `doctor --env <name>` | Check environment configuration and reachability. |
-| `rca`, `report`, `post-run` | Collect failures, merge RCA into the report, or do both. |
+| `rca`, `report`, `post-run [--heal]` | AI RCA of the last run, merge it into the report, or both (+ heal). |
 
 `scripts/new-spec.sh <file> [env]` copies a local spec into `specs/`, builds the jar if
 missing, and starts generation. Its generation command is allowed to fail without stopping
@@ -369,8 +289,8 @@ the script: check its output and complete any agent request before expecting cas
 the script accepts a URL argument, the current CLI test-case task expects a local file; use
 the UI URL import or download an authorized spec to a local file first.
 
-The `Makefile` provides shortcuts including `build`, `unit`, `serve`, `automation`, `test`,
-and `report`. Inspect the target before relying on optional arguments.
+The `Makefile` provides shortcuts including `build`, `unit`, `serve`, `automation`, `test`, `heal`,
+`ai-pending`, `ai-apply` and `report`. Inspect the target before relying on optional arguments.
 
 ## Docker and CI
 
@@ -388,8 +308,8 @@ security before sharing a deployment.
 `.github/workflows/api-tests.yml` builds and unit-tests on pushes and pull requests, has a
 PR spec-generation job, and runs committed automation on non-PR events with report artifacts.
 The PR job has no configured LLM provider/token, so it can export agent requests rather than
-generate cases automatically. The API-test job currently hard-codes the retired GitHub Models
-provider; do not enable its LLM RCA as-is. Configure an approved provider and secrets in the
+generate cases automatically. If you use the workflows, replace any GitHub Models (retired) LLM
+settings with your provider's key as a secret. Configure an approved provider and secrets in the
 workflow before relying on server-side AI in CI. The workflow is not updated merely by changing
 your local shell. `.github/workflows/copilot-setup-steps.yml` prepares the Copilot cloud-agent
 environment.
@@ -407,7 +327,7 @@ environment.
 | `src/test/java/com/qa/automation/` | Client, auth, API, services, steps, assertions and runner. |
 | `src/test/resources/features/generated/` | AI-generated feature files for approved cases. |
 | `src/test/java/org/rg/reporter/`, `src/test/resources/modern-reporter/ui/` | HTML reporter and its UI. |
-| `.github/agents/`, `.github/skills/`, `.github/prompts/` | Project-specific Copilot agents, skills and prompt files. |
+| `.github/copilot-instructions.md`, `agents/api-qa`, `skills/`, `prompts/` | Copilot: one agent, `/ai` (answer the queue), `/pipeline`, `/generate-tests`, `/build-features`, `/run-tests`, `/review-status`. |
 | `config/env/`, `scripts/` | Environment configuration and local workflow scripts. |
 
 Automation follows **steps -> services/API -> ApiClient -> Rest Assured**. Generated endpoint
@@ -420,11 +340,12 @@ instructions and skills. Review generated content and keep assertions faithful t
 
 | Symptom | What to check |
 | --- | --- |
-| UI says no LLM token | Set a supported provider and its key in the server's environment, restart the UI, or use Copilot agent mode. The UI does not use the Copilot session token. |
-| LLM call fails even though a token is present | Check `[llm]` output, provider URL, model, permissions, proxy, CA trust and company policy. Token presence is not a connectivity check. |
+| UI shows *Waiting for Copilot* | Expected without an LLM key: type `/ai` in Copilot Chat (Agent mode). Or set a key on the server and restart the UI. |
+| LLM call fails even though a key is set | The work is queued for `/ai` instead. Check `[llm]` output, base URL, model, auth header, proxy/`NO_PROXY`, CA trust. `ai spec-audit --spec <f> --mode llm` shows the error directly. |
 | No approved cases | Have a human review and approve appropriate cases in the UI before generating automation. |
-| Agent export exists but no cases or code appear | Complete every answer in the exported requests file and run the matching `ai <task> --apply`; inspect rejections. |
+| Copilot answered but nothing changed | Run `ai apply` (or **Apply answers** in the UI) and read the "rejected" lines: they say exactly what to fix. |
+| "Missing test data: set testdata.X" | The scenario does not create its data yet: run with **AI heal** (or `ai heal` + `/ai`). |
 | Dry run reports undefined or ambiguous steps | Review generated steps and shared definitions; correct the automation and rerun the dry run without weakening assertions. |
 | Certificate or connectivity errors | Run `doctor --env <name>`, check proxy and CA configuration, and fix trust rather than disabling TLS verification. |
-| RCA is unclassified | Run post-processing first; then use configured LLM RCA or the agent RCA workflow, and review the evidence and any rejected answers. |
+| RCA is UNCLASSIFIED | The analysis is queued: `/ai` (or set an LLM key and `post-run`). |
 | UI/container cannot run Maven | Verify Maven is installed and accessible to the UI process; the supplied Docker image is JRE-only. |

@@ -1,6 +1,7 @@
 ---
-description: Let the AI write the automation (features, <Tag>Api, <Tag>Steps, assertions) for the approved cases
-agent: feature-author
+description: Let the AI write the automation (features, Api, Steps, assertions) for the APPROVED cases
+agent: api-qa
 ---
-Follow the `testcases-to-features` skill for ${input:tag:all tags (or one tag)}. Report the files written, the
-assertions you chose, the dry-run result and the command to run them. Remind the person to review the diff.
+Tag `${input:tag:all tags}`. Run `ai automation` (with `--tag <tag>` unless "all tags"), answer + apply when queued
+(`ai-assist` skill), then `mvn -q test -Dcucumber.execution.dry-run=true` must pass. Reply with the files written and
+"review the diff before running".

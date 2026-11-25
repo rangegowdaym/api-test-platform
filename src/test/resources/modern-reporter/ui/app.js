@@ -67,7 +67,7 @@
     TEST_DATA: 'The test data the case depends on is missing or stale.',
     TEST_DEFECT: 'The test itself is wrong (step, placeholder or expectation).',
     FLAKY: 'The case passes and fails on the same code.',
-    UNCLASSIFIED: 'Not analysed by the AI yet: run /rca in Copilot agent mode, or post-run --llm.',
+    UNCLASSIFIED: 'Not analysed by the AI yet: type /ai in Copilot Chat (agent mode), or set an LLM token.',
   };
   // Generated scenarios carry their test-case id as a tag, e.g. @TC-orders-createOrder-positive.
   const caseIdOf = (t) => { const tag = (t.tags || []).find((x) => /^@?TC-/.test(x)); return tag ? tag.replace(/^@/, '') : null; };

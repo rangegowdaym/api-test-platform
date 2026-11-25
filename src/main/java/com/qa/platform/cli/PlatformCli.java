@@ -1,7 +1,6 @@
 package com.qa.platform.cli;
 
 import com.qa.platform.common.Json;
-import com.qa.platform.common.LlmClient;
 import com.qa.platform.common.Workspace;
 import com.qa.platform.generate.CaseStore;
 import com.qa.platform.model.TestCase;
@@ -19,7 +18,8 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 @Command(name = "api-test-platform", mixinStandardHelpOptions = true, version = "1.0.0",
-    description = "Swagger/API docs -> JSON test cases -> human approval -> Cucumber features -> RCA report",
+    description = "AI-first API testing: spec -> AI test cases -> HUMAN approval -> AI automation -> run -> AI RCA/heal -> report."
+        + " AI tasks are answered by your LLM API when a token is set, else queued for Copilot agent mode (/ai).",
     subcommands = {
         PlatformCli.Generate.class, PlatformCli.Status.class,
         PlatformCli.Propose.class, PlatformCli.Rca.class, PlatformCli.Report.class, PlatformCli.Post.class,
@@ -57,11 +57,30 @@ public class PlatformCli implements Runnable {
       System.out.println("Total: " + all.size());
       System.out.println("By status:   " + byStatus);
       System.out.println("By category: " + byCat);
+      try {
+        var runner = new com.qa.platform.ai.AiRunner();
+        System.out.println("AI answers:  " + runner.llmName());
+        var pending = runner.pending();
+        pending.forEach(x -> System.out.println("Queued for Copilot: " + x.task() + " " + x.args() + " (" + x.answered() + "/" + x.requests()
+            + " answered) -> in Copilot Chat type /ai"));
+        System.out.println("Next: " + next(byStatus, pending.isEmpty()));
+      } catch (Exception e) {
+        System.out.println("AI queue: " + e.getMessage());
+      }
       return 0;
     }
   }
 
-  @Command(name = "propose", description = "Add proposed test cases (e.g. written by the test-designer agent) as PENDING_REVIEW")
+  /** The one next step, so a person or an agent always knows what to do. */
+  static String next(Map<String, Long> byStatus, boolean queueEmpty) {
+    if (!queueEmpty) return "answer the queued AI tasks: Copilot Chat /ai (or set an LLM token and re-run the step)";
+    if (byStatus.isEmpty()) return "put a spec in specs/ and run: generate --spec specs/<file>   (or Import spec in the UI)";
+    if (byStatus.getOrDefault(TestCase.PENDING, 0L) > 0) return "review the PENDING_REVIEW cases in the approval UI (serve), approve or reject";
+    if (byStatus.getOrDefault(TestCase.APPROVED, 0L) > 0 && !Files.exists(Workspace.FEATURES)) return "ai automation (UI button 1)";
+    return "ai automation for new approvals, then Execute tests (UI) or scripts/run-tests.sh";
+  }
+
+  @Command(name = "propose", description = "Add proposed test cases (e.g. written by hand or by an agent) as PENDING_REVIEW")
   public static class Propose implements Callable<Integer> {
     @Option(names = "--file", required = true, description = "JSON array of test cases, e.g. testcases/_proposed/orders.json")
     Path file;
@@ -75,42 +94,50 @@ public class PlatformCli implements Runnable {
     }
   }
 
-  @Command(name = "rca", description = "Collect the failures of the last run -> target/rca/rca.json; with --llm the AI analyses them")
+  @Command(name = "rca", description = "Collect the failures of the last run and let the AI analyse them (LLM now, else queued for Copilot)")
   public static class Rca implements Callable<Integer> {
-    @Option(names = "--llm", description = "Let the LLM API do the RCA now: category, owner, grouping, fix, tickets, triage (LLM_PROVIDER, README 6a)") boolean llm;
+    @Option(names = "--no-ai", description = "Only collect the facts (failures stay UNCLASSIFIED)") boolean noAi;
+    @Option(names = "--llm", hidden = true, description = "Accepted for old scripts; the AI is on by default") boolean llm;
 
     public Integer call() throws Exception {
-      if (llm) System.setProperty("llm.enabled", "true");
-      LlmClient client = new LlmClient();
-      RcaEngine.Report r = new RcaEngine(Workspace.EVIDENCE, Workspace.ROOT.resolve("target/run-summary.json"),
-          Workspace.HISTORY, Workspace.RCA, new CaseStore(Workspace.TESTCASES), client).run();
+      RcaEngine engine = new RcaEngine(Workspace.EVIDENCE, Workspace.ROOT.resolve("target/run-summary.json"),
+          Workspace.HISTORY, Workspace.RCA, new CaseStore(Workspace.TESTCASES), noAi ? null : new com.qa.platform.ai.AiRunner());
+      RcaEngine.Report r = engine.run();
       System.out.printf("%d failures -> %d root causes (%d new). By category: %s%n",
           r.failures(), r.groups(), r.newFailures(), r.byCategory());
       System.out.println("Written: " + Workspace.RCA.resolve("rca.json"));
-      if (r.groups() > 0 && (!llm || !client.enabled())) {
-        if (llm) System.out.println("No token for LLM_PROVIDER=" + client.provider() + ": failures stay UNCLASSIFIED for now.");
-        System.out.println("AI root cause analysis from your IDE agent (no token needed): run /rca in Copilot agent mode,"
-            + " or: java -jar target/api-test-platform.jar ai rca --mode agent");
-      }
       return 0;
     }
   }
 
-  @Command(name = "ai", description = "AI-assisted tasks, by LLM API or by your IDE agent: "
-      + "testcases, spec-audit, automation (features + Api + Steps), rca")
+  @Command(name = "ai", description = "Run an AI task (testcases, spec-audit, automation, rca, heal): LLM API when a token is set,"
+      + " else queued for Copilot agent mode. 'ai pending' lists the queue, 'ai apply' applies Copilot's answers.")
   public static class Ai implements Callable<Integer> {
-    @picocli.CommandLine.Parameters(index = "0", description = "Task: ${COMPLETION-CANDIDATES}",
+    @picocli.CommandLine.Parameters(index = "0", description = "Task (${COMPLETION-CANDIDATES}), or: pending, apply",
         completionCandidates = AiTaskNames.class) String task;
     @Option(names = "--spec", description = "testcases, spec-audit: spec or API doc file") String spec;
     @Option(names = "--context", description = "testcases: business rules the spec does not state") String context;
-    @Option(names = "--tag", description = "automation: only this OpenAPI tag (default: every tag with APPROVED cases)") String tag;
+    @Option(names = "--tag", description = "automation, heal: only this OpenAPI tag (default: every tag with APPROVED cases)") String tag;
     @Option(names = "--mode", defaultValue = "auto",
         description = "auto (LLM when a token is configured, else agent), llm, agent") String mode;
-    @Option(names = "--apply", description = "Apply the answers the IDE agent wrote for the last --mode agent export") boolean apply;
-    @Option(names = "--by", defaultValue = "ide-agent", description = "With --apply: who answered, e.g. copilot-agent, claude-code") String by;
+    @Option(names = "--apply", description = "Apply the answers the IDE agent wrote for this task") boolean apply;
+    @Option(names = "--by", defaultValue = "copilot-agent", description = "Who answered (recorded in the audit trail)") String by;
 
     public Integer call() throws Exception {
       var runner = new com.qa.platform.ai.AiRunner();
+      if ("pending".equals(task)) {
+        var pending = runner.pending();
+        if (pending.isEmpty()) System.out.println("Nothing queued for the IDE agent.");
+        pending.forEach(p -> System.out.println(p.task() + "  " + p.args() + "  answered " + p.answered() + "/" + p.requests()
+            + "  -> " + p.requestsFile()));
+        return 0;
+      }
+      if ("apply".equals(task)) {
+        var results = runner.applyAll(by);
+        if (results.isEmpty()) System.out.println("No answers to apply (ai pending shows what is queued).");
+        results.forEach(x -> System.out.print(com.qa.platform.ai.AiRunner.format(x)));
+        return results.stream().allMatch(x -> x.rejected().isEmpty()) ? 0 : 1;
+      }
       com.qa.platform.ai.AiRunner.Result r;
       if (apply) {
         r = runner.applyAnswers(task, by);
@@ -154,14 +181,20 @@ public class PlatformCli implements Runnable {
     }
   }
 
-  @Command(name = "post-run", description = "rca + report + one-line summary (used by scripts/run-tests.sh and CI)")
+  @Command(name = "post-run", description = "AI rca + report + one-line summary (used by scripts/run-tests.sh and CI)")
   public static class Post implements Callable<Integer> {
-    @Option(names = "--llm") boolean llm;
+    @Option(names = "--no-ai") boolean noAi;
+    @Option(names = "--llm", hidden = true) boolean llm;
+    @Option(names = "--heal", description = "After the RCA, let the AI fix automation/test-data failures (then re-run the tests)") boolean heal;
 
     public Integer call() throws Exception {
       Rca rca = new Rca();
-      rca.llm = llm;
+      rca.noAi = noAi;
       rca.call();
+      if (heal && !noAi) {
+        var r = new com.qa.platform.ai.AiRunner().run(com.qa.platform.ai.AiTasks.create("heal", Map.of()), com.qa.platform.ai.AiRunner.Mode.AUTO);
+        System.out.print(com.qa.platform.ai.AiRunner.format(r));
+      }
       new Report().call();
       String line = ReportRcaMerger.oneLine(Workspace.ROOT.resolve("target/run-summary.json"), Workspace.RCA.resolve("rca.json"));
       System.out.println("SUMMARY: " + line);

@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.qa.platform.ai.AiRunner;
 import com.qa.platform.ai.AiTasks;
 import com.qa.platform.common.Json;
-import com.qa.platform.common.LlmClient;
 import com.qa.platform.generate.CaseStore;
 import com.qa.platform.model.Evidence;
 import com.qa.platform.model.RcaEntry;
@@ -25,9 +24,9 @@ import java.util.stream.Stream;
  * and writes target/rca/rca.json.
  *
  * <p>The ROOT CAUSE ANALYSIS ITSELF IS DONE BY AI (task "rca", prompts/rca.md): category, owner, grouping of
- * failures with the same cause, explanation, fix and bug ticket. With an LLM token and --llm it runs right away;
- * otherwise this class writes a placeholder per failure (category UNCLASSIFIED) and the IDE agent finishes it
- * with {@code ai rca --mode agent} / {@code /rca}. Testers review the result in the report.
+ * failures with the same cause, explanation, fix and bug ticket. This class writes a placeholder per failure
+ * (category UNCLASSIFIED), then hands the task to {@link AiRunner}: with an LLM token it is answered right away,
+ * otherwise it is queued for Copilot agent mode (/ai). Testers review the result in the report.
  */
 public class RcaEngine {
 
@@ -35,15 +34,20 @@ public class RcaEngine {
   private final Path runSummary;
   private final Path historyDir;
   private final Path outDir;
-  private final LlmClient llm;
+  private final AiRunner ai;
+  private AiRunner.Result aiResult;
 
-  public RcaEngine(Path evidenceDir, Path runSummary, Path historyDir, Path outDir, CaseStore cases, LlmClient llm) {
+  /** {@code ai} null = collect the facts only (no AI task). */
+  public RcaEngine(Path evidenceDir, Path runSummary, Path historyDir, Path outDir, CaseStore cases, AiRunner ai) {
     this.evidenceDir = evidenceDir;
     this.runSummary = runSummary;
     this.historyDir = historyDir;
     this.outDir = outDir;
-    this.llm = llm;
+    this.ai = ai;
   }
+
+  /** What the AI step did (null when no failure or no AI): mode "llm" = analysed, "agent" = queued for Copilot. */
+  public AiRunner.Result aiResult() { return aiResult; }
 
   public record Report(String runId, String generatedAt, int failures, int groups,
                        Map<String, Long> byCategory, Map<String, Long> byOwner, long newFailures,
@@ -61,7 +65,7 @@ public class RcaEngine {
       List<String> prev = history.previous(e.caseId());
       boolean isNew = prev.isEmpty() || !"FAILED".equals(prev.get(prev.size() - 1));
       entries.add(new RcaEntry(e.caseId(), List.of(), e.scenario(), e.endpoint(), "UNCLASSIFIED", 0, "unclassified|" + e.caseId(),
-          abbreviate(e.errorType() + ": " + e.errorMessage(), 140), "Not analysed yet: run /rca (IDE agent) or post-run --llm.", "",
+          abbreviate(e.errorType() + ": " + e.errorMessage(), 140), "Not analysed yet: waiting for the AI (Copilot Chat: /ai).", "",
           "unassigned", isNew, history.firstFailedRunOfStreak(e.caseId(), runId), prev.subList(Math.max(0, prev.size() - 5), prev.size()),
           "evidence/" + e.caseId() + ".json", e.curl(), null, List.of(), "none"));
     }
@@ -76,10 +80,11 @@ public class RcaEngine {
     for (Evidence e : failures) statuses.putIfAbsent(e.caseId(), "FAILED");
     if (!statuses.isEmpty()) history.append(runId, statuses, Instant.now().toString());
 
-    if (!failures.isEmpty() && llm.enabled()) {
+    if (!failures.isEmpty() && ai != null) {
       try {
-        System.out.print(AiRunner.format(new AiRunner().run(AiTasks.create("rca", Map.of()), AiRunner.Mode.LLM)));
-        return Json.MAPPER.readValue(outDir.resolve("rca.json").toFile(), Report.class);
+        aiResult = ai.run(AiTasks.create("rca", Map.of()), AiRunner.Mode.AUTO);
+        System.out.print(AiRunner.format(aiResult));
+        if ("llm".equals(aiResult.mode())) return Json.MAPPER.readValue(outDir.resolve("rca.json").toFile(), Report.class);
       } catch (Exception ex) {
         System.err.println("[rca] AI analysis failed, placeholders kept: " + ex.getMessage());
       }

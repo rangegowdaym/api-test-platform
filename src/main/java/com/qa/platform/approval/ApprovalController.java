@@ -33,8 +33,12 @@ public class ApprovalController {
   public record EditRequest(JsonNode testCase, String comment) {}
 
   private final ApprovalService service;
+  private final AiService ai;
 
-  public ApprovalController(ApprovalService service) { this.service = service; }
+  public ApprovalController(ApprovalService service, AiService ai) {
+    this.service = service;
+    this.ai = ai;
+  }
 
   @GetMapping("/me")
   public Map<String, String> me(Principal p) { return Map.of("user", p.getName()); }
@@ -109,7 +113,7 @@ public class ApprovalController {
     } else {
       throw new IllegalArgumentException("Send a file or ?url=");
     }
-    return service.importSpec(target, p.getName(), context);
+    return service.importSpec(target, p.getName(), context, ai);
   }
 
   @ExceptionHandler(IllegalStateException.class)

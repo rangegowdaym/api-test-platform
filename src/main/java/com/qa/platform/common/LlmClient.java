@@ -15,53 +15,49 @@ import java.util.Optional;
 
 /**
  * Minimal LLM client for every AI task of the platform (com.qa.platform.ai: testcases, spec-audit, automation, rca),
- * no SDK. Off unless -Dllm.enabled=true / LLM_ENABLED=true
- * (the --llm flag and the UI checkbox set it) AND a token is present. Callers pass already-masked text and keep a
- * fallback (agent mode or a placeholder): every failure returns an empty Optional.
+ * no SDK. Used automatically when a token for LLM_PROVIDER is present; otherwise every AI task is queued for
+ * Copilot agent mode (prompt /ai). Callers pass already-masked text; every failure returns an empty Optional.
  *
  * <pre>
  * LLM_PROVIDER     endpoint                                                        token (first one set)
- * github-models    https://models.github.ai/inference/chat/completions             GITHUB_MODELS_TOKEN, GITHUB_TOKEN (models:read)
- *                  LLM_GITHUB_ORG=&lt;org&gt; bills the org: /orgs/&lt;org&gt;/inference/...
+ * (not set)        picked from the key you set: LLM_API_KEY/OPENAI_API_KEY -> openai, ANTHROPIC_API_KEY -> anthropic,
+ *                  AZURE_OPENAI_API_KEY -> azure-openai; no key -> agent (Copilot answers). GitHub Models was retired
+ *                  on 2026-07-30 and is not supported; a GITHUB_TOKEN is never used as an LLM key.
  * openai           LLM_BASE_URL + /chat/completions  (OpenAI-compatible: company   LLM_API_KEY, OPENAI_API_KEY
  *                  gateway, LiteLLM, vLLM, OpenAI). Default base https://api.openai.com/v1
  * azure-openai     LLM_BASE_URL/openai/deployments/LLM_DEPLOYMENT/chat/completions  LLM_API_KEY, AZURE_OPENAI_API_KEY
  *                  ?api-version=LLM_API_VERSION (default 2024-10-21), header api-key
  * anthropic        LLM_BASE_URL (default https://api.anthropic.com) + /v1/messages ANTHROPIC_API_KEY, LLM_API_KEY
  * agent | none     no HTTP call: AI tasks are answered by the IDE agent
- *                  (ai <task> --mode agent / --apply; Copilot agent mode, Claude Code)
+ *                  (queued in target/ai/; Copilot agent mode answers with the /ai prompt)
+ * LLM_ENABLED=false keeps the token unused (everything goes to Copilot)
  *
- * LLM_MODEL         model id (gateway/deployment specific). Defaults: openai/gpt-4.1, gpt-4.1, claude-sonnet-5-5
+ * LLM_MODEL         model id (gateway/deployment specific; set it). Defaults: gpt-4.1, claude-sonnet-5-5
  * LLM_AUTH_HEADER   header for the token on openai, e.g. "api-key" or "X-Api-Key" (default: Authorization: Bearer)
- * LLM_PROXY         http://host:port for the LLM call only; else HTTPS_PROXY; else the JVM's https.proxyHost
+ * LLM_PROXY         http://host:port for the LLM call only (none = direct); else HTTPS_PROXY; NO_PROXY hosts go direct
  * </pre>
  * Company trust store for a gateway with an internal certificate: JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=..."
  */
 public class LlmClient {
 
-  /** Provider when LLM_PROVIDER is not set. */
-  public static final String DEFAULT_PROVIDER = "github-models";
-
-  private final String provider = cfg("llm.provider", "LLM_PROVIDER", DEFAULT_PROVIDER).toLowerCase(Locale.ROOT);
+  private final String provider = cfg("llm.provider", "LLM_PROVIDER", detectProvider()).toLowerCase(Locale.ROOT);
   private final boolean enabled;
   private final String model = cfg("llm.model", "LLM_MODEL", switch (provider) {
     case "anthropic" -> "claude-sonnet-5-5";
-    case "openai", "azure-openai" -> "gpt-4.1";
-    default -> "openai/gpt-4.1";
+    default -> "gpt-4.1";
   });
   private final String token = switch (provider) {
     case "anthropic" -> first(System.getenv("ANTHROPIC_API_KEY"), System.getenv("LLM_API_KEY"));
     case "openai" -> first(System.getenv("LLM_API_KEY"), System.getenv("OPENAI_API_KEY"));
     case "azure-openai" -> first(System.getenv("LLM_API_KEY"), System.getenv("AZURE_OPENAI_API_KEY"));
-    case "agent", "none" -> null;
-    default -> first(System.getenv("GITHUB_MODELS_TOKEN"), System.getenv("GITHUB_TOKEN"));
+    default -> null;            // agent, none, or an unsupported provider (e.g. the retired github-models)
   };
   private final HttpClient http = client();
 
-  /** Enabled by -Dllm.enabled / LLM_ENABLED (the --llm flag and the UI checkbox set it). */
-  public LlmClient() { this(Boolean.parseBoolean(cfg("llm.enabled", "LLM_ENABLED", "false"))); }
+  /** On whenever a token is present; LLM_ENABLED=false (or LLM_PROVIDER=agent) sends everything to Copilot instead. */
+  public LlmClient() { this(Boolean.parseBoolean(cfg("llm.enabled", "LLM_ENABLED", "true"))); }
 
-  /** {@code new LlmClient(true)}: the caller asked for the LLM explicitly (ai --mode llm). Still needs a token. */
+  /** {@code new LlmClient(false)}: never call the API (tests). Still needs a token when true. */
   public LlmClient(boolean enabled) { this.enabled = enabled; }
 
   public boolean enabled() { return enabled && configured(); }
@@ -69,7 +65,7 @@ public class LlmClient {
   /** A token for the provider is present (the run may still keep the LLM off). */
   public boolean configured() { return token != null && !token.isBlank(); }
 
-  /** "agent": narratives come from the IDE agent (Copilot agent mode / Claude Code) instead of an HTTP call. */
+  /** "agent": answers come from the IDE agent (Copilot agent mode, prompt /ai) instead of an HTTP call. */
   public boolean agentMode() { return "agent".equals(provider) || !configured(); }
 
   public String provider() { return provider; }
@@ -85,7 +81,7 @@ public class LlmClient {
         case "openai" -> chat(URI.create(stripSlash(cfg("llm.baseUrl", "LLM_BASE_URL", "https://api.openai.com/v1")) + "/chat/completions"),
             system, user, maxTokens, false);
         case "azure-openai" -> chat(azureUri(), system, user, maxTokens, true);
-        default -> chat(githubUri(), system, user, maxTokens, false);
+        default -> throw new IllegalStateException("unsupported LLM_PROVIDER=" + provider + " (openai, azure-openai, anthropic, agent)");
       };
       HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
       if (resp.statusCode() / 100 != 2) {
@@ -103,16 +99,20 @@ public class LlmClient {
       }
       return text.isBlank() ? Optional.empty() : Optional.of(text);
     } catch (Exception e) {
-      System.err.println("[llm] call failed: " + e.getMessage());
+      System.err.println("[llm] call to " + provider + " failed: " + e);
       return Optional.empty();
     }
   }
 
-  private URI githubUri() {
-    String org = System.getenv("LLM_GITHUB_ORG");
-    String base = stripSlash(cfg("llm.baseUrl", "LLM_BASE_URL", "https://models.github.ai"));
-    return URI.create(base + (org == null || org.isBlank() ? "" : "/orgs/" + org) + "/inference/chat/completions");
+  /** LLM_PROVIDER not set: follow the key that is present; none -> the IDE agent answers. */
+  private static String detectProvider() {
+    if (present(System.getenv("LLM_API_KEY")) || present(System.getenv("OPENAI_API_KEY"))) return "openai";
+    if (present(System.getenv("ANTHROPIC_API_KEY"))) return "anthropic";
+    if (present(System.getenv("AZURE_OPENAI_API_KEY"))) return "azure-openai";
+    return "agent";
   }
+
+  private static boolean present(String s) { return s != null && !s.isBlank(); }
 
   private URI azureUri() {
     String base = stripSlash(cfg("llm.baseUrl", "LLM_BASE_URL", ""));
@@ -122,7 +122,7 @@ public class LlmClient {
     return URI.create(base + "/openai/deployments/" + deployment + "/chat/completions?api-version=" + version);
   }
 
-  /** OpenAI-style chat completions (GitHub Models, OpenAI-compatible gateways, Azure OpenAI). */
+  /** OpenAI-style chat completions (OpenAI-compatible gateways, OpenAI, Azure OpenAI). */
   private HttpRequest chat(URI uri, String system, String user, int maxTokens, boolean azure) throws Exception {
     ObjectNode body = Json.MAPPER.createObjectNode();
     if (!azure) body.put("model", model);
@@ -135,9 +135,6 @@ public class LlmClient {
         .timeout(Duration.ofSeconds(90))
         .header("Content-Type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(Json.MAPPER.writeValueAsString(body)));
-    if ("github-models".equals(provider)) {
-      b.header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28");
-    }
     String authHeader = azure ? "api-key" : cfg("llm.authHeader", "LLM_AUTH_HEADER", "Authorization");
     b.header(authHeader, "Authorization".equalsIgnoreCase(authHeader) ? "Bearer " + token : token);
     return b.build();
@@ -164,15 +161,38 @@ public class LlmClient {
   private static HttpClient client() {
     HttpClient.Builder b = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15));
     String proxy = first(System.getenv("LLM_PROXY"), first(System.getenv("HTTPS_PROXY"), System.getenv("https_proxy")));
-    if (proxy != null && !proxy.isBlank()) {
+    if (proxy != null && !proxy.isBlank() && !"none".equalsIgnoreCase(proxy.trim())) {
       try {
         URI p = URI.create(proxy.contains("://") ? proxy : "http://" + proxy);
-        b.proxy(ProxySelector.of(new InetSocketAddress(p.getHost(), p.getPort() > 0 ? p.getPort() : 8080)));
+        java.net.Proxy via = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(p.getHost(), p.getPort() > 0 ? p.getPort() : 8080));
+        String noProxy = first(System.getenv("NO_PROXY"), System.getenv("no_proxy"));
+        b.proxy(new ProxySelector() {
+          @Override public java.util.List<java.net.Proxy> select(URI uri) {
+            return java.util.List.of(bypass(uri.getHost(), noProxy) ? java.net.Proxy.NO_PROXY : via);
+          }
+          @Override public void connectFailed(URI uri, java.net.SocketAddress sa, java.io.IOException e) { }
+        });
       } catch (IllegalArgumentException e) {
         System.err.println("[llm] ignoring unreadable proxy setting: " + e.getMessage());
       }
     }
     return b.build();
+  }
+
+  /** NO_PROXY: comma list of hosts, .suffixes or *; localhost/127.0.0.1 never use the proxy. */
+  public static boolean bypass(String host, String noProxy) {
+    if (host == null) return false;
+    String h = host.toLowerCase(Locale.ROOT);
+    if (h.equals("localhost") || h.equals("127.0.0.1") || h.equals("::1")) return true;
+    if (noProxy == null) return false;
+    for (String raw : noProxy.split(",")) {
+      String n = raw.trim().toLowerCase(Locale.ROOT).replaceFirst(":\\d+$", "");
+      if (n.isEmpty()) continue;
+      if (n.equals("*") || h.equals(n)) return true;
+      String suffix = n.startsWith("*.") ? n.substring(1) : n.startsWith(".") ? n : "." + n;
+      if (h.endsWith(suffix)) return true;
+    }
+    return false;
   }
 
   /** Pulls the first JSON object/array out of a model answer (tolerates ```json fences). */

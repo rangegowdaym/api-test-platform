@@ -124,24 +124,21 @@ public class ApprovalService {
 
   /**
    * The AI designs the test cases for the uploaded spec (task "testcases") and merges them with the stored ones;
-   * every new or changed case is PENDING_REVIEW. Without an LLM token on the server the spec is saved and the
-   * answer says which command to run in Copilot agent mode.
+   * every new or changed case is PENDING_REVIEW. With an LLM token this happens now; without one the task is
+   * queued for Copilot agent mode (/ai) and the cases appear when the agent has applied its answer.
    */
   @Transactional
-  public synchronized Map<String, Object> importSpec(Path spec, String actor, String context) throws Exception {
-    var runner = new com.qa.platform.ai.AiRunner();
+  public synchronized Map<String, Object> importSpec(Path spec, String actor, String context, AiService ai) throws Exception {
+    Map<String, String> args = new LinkedHashMap<>();
+    args.put("spec", Workspace.rel(spec));
+    if (context != null && !context.isBlank()) args.put("context", context);
+    var r = ai.run("testcases", args);
+    events.save(new ReviewEvent("*", "IMPORT", actor, Workspace.rel(spec) + " (AI " + r.mode() + ": "
+        + ("agent".equals(r.mode()) ? "queued for Copilot" : String.join("; ", r.messages())) + ")", 0));
     Map<String, Object> out = new LinkedHashMap<>();
     out.put("spec", spec.getFileName().toString());
-    if (!runner.llmAvailable()) {
-      throw new IllegalStateException("Saved " + Workspace.rel(spec) + ". No LLM token on the server: in VS Code Copilot agent mode run "
-          + "/ai testcases --spec " + Workspace.rel(spec) + "  (or configure LLM_PROVIDER, README section 6a)");
-    }
-    Map<String, String> args = new LinkedHashMap<>();
-    args.put("spec", spec.toString());
-    if (context != null && !context.isBlank()) args.put("context", context);
-    var r = runner.run(com.qa.platform.ai.AiTasks.create("testcases", args), com.qa.platform.ai.AiRunner.Mode.LLM);
-    events.save(new ReviewEvent("*", "IMPORT", actor, Workspace.rel(spec) + " (AI: " + String.join("; ", r.messages()) + ")", 0));
-    out.put("messages", r.messages());
+    out.put("ai", r);
+    out.put("messages", "agent".equals(r.mode()) ? List.of("Saved " + Workspace.rel(spec) + ". " + r.next()) : r.messages());
     out.put("rejected", r.rejected());
     return out;
   }

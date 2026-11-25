@@ -1,12 +1,6 @@
 ---
-description: Run the API tests, then RCA and the report
-agent: agent
-tools: ['read', 'search', 'execute']
-argument-hint: "env tags, e.g. qa @smoke"
+description: Run the tests, then AI RCA and heal (automation/test-data faults only), re-run once
+agent: api-qa
 ---
-Follow the `run-api-tests` skill.
-Environment: `${input:env:qa}`. Tag expression: `${input:tags:@smoke}`.
-
-Run `./scripts/run-tests.sh <env> "<tags>"`, print the SUMMARY line and the report path
-`reports/index.html#dashboard` (root causes: `#rca`). If there were failures, suggest running `/rca`.
-The same run can be started by a human from the approval UI (button 3, Execute tests).
+Environment `${input:env:qa}`, tags `${input:tags:@api}`. Follow the `run-api-tests` skill, then the "Then" step of
+the `ai-assist` skill. Reply with pass rate, root causes by owner, what was healed and `reports/index.html#rca`.

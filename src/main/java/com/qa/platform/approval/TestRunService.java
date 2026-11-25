@@ -1,7 +1,8 @@
 package com.qa.platform.approval;
 
+import com.qa.platform.ai.AiRunner;
+import com.qa.platform.ai.AiTasks;
 import com.qa.platform.common.Json;
-import com.qa.platform.common.LlmClient;
 import com.qa.platform.common.Masking;
 import com.qa.platform.common.Workspace;
 import com.qa.platform.generate.CaseStore;
@@ -28,8 +29,9 @@ import org.springframework.stereotype.Service;
 
 /**
  * "Execute tests" in the approval UI: runs {@code mvn test} for the chosen environment and tag expression
- * in the project folder, streams its output to the page, then runs the RCA and adds it to the report
- * (the same steps as {@code scripts/run-tests.sh}).
+ * in the project folder, streams its output to the page, then lets the AI do the RCA and adds it to the report.
+ * With "heal" the AI then fixes automation/test-data failures (never expectations) and the run is repeated once.
+ * Without an LLM token the AI steps are queued for Copilot agent mode (/ai).
  *
  * <p>Safety: the command is a fixed argument list started without a shell; environment and tags are
  * validated against strict patterns; one run at a time; only REVIEWER users can start or cancel a run
@@ -46,13 +48,14 @@ public class TestRunService {
 
   public enum Status { RUNNING, PASSED, FAILED, ERROR, CANCELLED }
 
-  public record Run(String id, String env, String tags, int threads, boolean llm, String startedBy, String startedAt,
+  public record Run(String id, String env, String tags, int threads, boolean ai, String startedBy, String startedAt,
                     Status status, Integer exitCode, String finishedAt, String summary, String reportUrl,
                     String phase, int lines) {}
 
   public record Log(Run run, int from, List<String> lines) {}
 
-  public record StartRequest(String env, String tags, Integer threads, Boolean llm) {}
+  /** ai: AI root cause analysis (default on); heal: AI fixes automation failures and re-runs once (needs an LLM token). */
+  public record StartRequest(String env, String tags, Integer threads, Boolean ai, Boolean heal) {}
 
   private final PipelineService pipeline;
   private final String mvn;
@@ -61,6 +64,8 @@ public class TestRunService {
   private final List<String> lines = new ArrayList<>();
   private volatile Process process;
   private volatile boolean cancelled;
+  private volatile boolean heal;
+  private List<String> command = List.of();
 
   private final List<String> mvnArgs;
 
@@ -87,7 +92,8 @@ public class TestRunService {
       throw new IllegalArgumentException("Tag expression may only contain @tags, and, or, not and parentheses");
     }
     int threads = r.threads() == null ? 4 : Math.max(1, Math.min(16, r.threads()));
-    boolean llm = Boolean.TRUE.equals(r.llm());
+    boolean ai = !Boolean.FALSE.equals(r.ai());
+    heal = ai && Boolean.TRUE.equals(r.heal());
 
     List<String> cmd = new ArrayList<>(List.of(mvn, "-B"));
     cmd.addAll(mvnArgs);
@@ -97,28 +103,71 @@ public class TestRunService {
     synchronized (lines) { lines.clear(); }
     cancelled = false;
     String id = "run-" + Instant.now().toEpochMilli();
-    Run run = new Run(id, env, tags.isEmpty() ? "(all)" : tags, threads, llm, actor, Instant.now().toString(),
+    Run run = new Run(id, env, tags.isEmpty() ? "(all)" : tags, threads, ai, actor, Instant.now().toString(),
         Status.RUNNING, null, null, null, reportUrl, "mvn test", 0);
     current.set(run);
-    append("$ " + String.join(" ", cmd.stream().map(TestRunService::quote).toList()));
-
-    ProcessBuilder pb = new ProcessBuilder(cmd).directory(Workspace.ROOT.toFile()).redirectErrorStream(true);
-    // a failed build must not be analysed with the previous run's summary
-    Files.deleteIfExists(Workspace.ROOT.resolve("target/run-summary.json"));
-    try {
-      process = pb.start();
-    } catch (IOException e) {
-      finish(Status.ERROR, null, "Could not start '" + mvn + "': " + e.getMessage()
-          + ". Install Maven, or set PLATFORM_MVN to its full path (e.g. C:\\tools\\maven\\bin\\mvn.cmd).");
-      return current.get();
-    }
-    Thread t = new Thread(() -> pump(run), "test-run-" + id);
+    command = cmd;
+    Thread t = new Thread(() -> pipeline(run), "test-run-" + id);
     t.setDaemon(true);
     t.start();
     return current.get();
   }
 
-  private void pump(Run run) {
+  /** mvn test -> AI RCA -> report; with heal: AI fixes the automation -> mvn test again -> AI RCA -> report. */
+  private void pipeline(Run run) {
+    Integer exit = mavenTest();
+    if (exit == null && !cancelled) return;                      // could not start Maven (finish() already called)
+    String summary = afterRun(run);
+    if (heal && !cancelled && failedCount(summary) > 0 && healed()) {
+      phase("re-run after heal");
+      append("[platform] re-running the same tests with the healed automation");
+      exit = mavenTest();
+      if (exit == null && !cancelled) return;
+      summary = afterRun(run);
+    }
+    if (cancelled) { finish(Status.CANCELLED, exit, "Cancelled"); return; }
+    if ((exit == null || exit != 0) && !Files.exists(Workspace.ROOT.resolve("target/run-summary.json"))) {
+      finish(Status.ERROR, exit, "Build failed before any test ran (compile error? missing step classes?): see the log");
+      return;
+    }
+    append("[platform] SUMMARY: " + summary);
+    Status status = exit == null || exit != 0 ? Status.ERROR : failedCount(summary) > 0 ? Status.FAILED : Status.PASSED;
+    finish(status, exit, summary);
+  }
+
+  /** Runs the AI heal task now (LLM only: a queued heal is picked up by Copilot's /ai). True when files changed. */
+  private boolean healed() {
+    phase("AI heal");
+    try {
+      AiRunner runner = new AiRunner();
+      if (!runner.llmAvailable()) {
+        append("[platform] heal needs an LLM token on the server; in Copilot Chat type /ai (it heals after the RCA)");
+        return false;
+      }
+      AiRunner.Result r = runner.run(AiTasks.create("heal", Map.of()), AiRunner.Mode.LLM);
+      r.messages().forEach(m -> append("[platform] heal: " + m));
+      r.rejected().forEach(m -> append("[platform] heal rejected: " + m));
+      return r.messages().stream().anyMatch(m -> m.contains("src/test/"));
+    } catch (Exception e) {
+      append("[platform] heal failed: " + e.getMessage());
+      return false;
+    }
+  }
+
+  /** Runs mvn test, streaming the log. Null when Maven could not be started (the run is finished as ERROR). */
+  private Integer mavenTest() {
+    phase("mvn test");
+    append("$ " + String.join(" ", command.stream().map(TestRunService::quote).toList()));
+    ProcessBuilder pb = new ProcessBuilder(command).directory(Workspace.ROOT.toFile()).redirectErrorStream(true);
+    try {
+      // a failed build must not be analysed with the previous run's summary
+      Files.deleteIfExists(Workspace.ROOT.resolve("target/run-summary.json"));
+      process = pb.start();
+    } catch (IOException e) {
+      finish(Status.ERROR, null, "Could not start '" + mvn + "': " + e.getMessage()
+          + ". Install Maven, or set PLATFORM_MVN to its full path (e.g. C:\\tools\\maven\\bin\\mvn.cmd).");
+      return null;
+    }
     Path logFile = Workspace.OUT.resolve("last-run.log");
     Integer exit = null;
     try {
@@ -139,26 +188,23 @@ public class TestRunService {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
-    if (cancelled) {
-      finish(Status.CANCELLED, exit, "Cancelled");
-      return;
-    }
-    // maven.test.failure.ignore=true in the pom: failing tests still exit 0; a build/compile error does not
-    if ((exit == null || exit != 0) && !Files.exists(Workspace.ROOT.resolve("target/run-summary.json"))) {
-      finish(Status.ERROR, exit, "Build failed before any test ran (compile error? missing step classes?): see the log");
-      return;
-    }
-    phase("RCA");
+    return exit == null ? -1 : exit;
+  }
+
+  /** RCA (AI answers now, or queued for Copilot) + report + one-line summary. */
+  private String afterRun(Run run) {
+    // maven.test.failure.ignore=true in the pom: failing tests still exit 0; a build/compile error leaves no summary
+    if (cancelled || !Files.exists(Workspace.ROOT.resolve("target/run-summary.json"))) return "no test results";
+    phase("AI RCA");
     String summary;
     try {
-      if (run.llm()) System.setProperty("llm.enabled", "true");
-      RcaEngine.Report rca = new RcaEngine(Workspace.EVIDENCE, Workspace.ROOT.resolve("target/run-summary.json"),
-          Workspace.HISTORY, Workspace.RCA, new CaseStore(Workspace.TESTCASES), new LlmClient()).run();
+      RcaEngine engine = new RcaEngine(Workspace.EVIDENCE, Workspace.ROOT.resolve("target/run-summary.json"),
+          Workspace.HISTORY, Workspace.RCA, new CaseStore(Workspace.TESTCASES), run.ai() ? new AiRunner() : null);
+      RcaEngine.Report rca = engine.run();
+      AiRunner.Result ai = engine.aiResult();
       append("[platform] RCA: " + rca.failures() + " failures -> " + rca.groups() + " root causes (" + rca.newFailures() + " new)"
-          + (run.llm() ? " [AI]" : " [not analysed yet]"));
-      if (rca.failures() > 0 && !run.llm()) {
-        append("[platform] AI root cause analysis without a token: run /rca in Copilot agent mode (or Claude Code)");
-      }
+          + (ai == null ? "" : "llm".equals(ai.mode()) ? " [analysed by AI]" : " [queued for Copilot]"));
+      if (ai != null && "agent".equals(ai.mode())) append("[platform] " + ai.next());
       phase("report");
       ReportRcaMerger.Result merged = new ReportRcaMerger().merge(Workspace.REPORTS.resolve("index.html"), Workspace.RCA.resolve("rca.json"));
       append("[platform] " + merged.message());
@@ -168,12 +214,8 @@ public class TestRunService {
       LOG.warn("Post-run step failed", e);
       append("[platform] post-run failed: " + e.getMessage());
       summary = "post-run failed: " + e.getMessage();
-    } finally {
-      if (run.llm()) System.clearProperty("llm.enabled");
     }
-    append("[platform] SUMMARY: " + summary);
-    Status status = exit == null || exit != 0 ? Status.ERROR : failedCount(summary) > 0 ? Status.FAILED : Status.PASSED;
-    finish(status, exit, summary);
+    return summary;
   }
 
   private static long failedCount(String summary) {
@@ -214,19 +256,19 @@ public class TestRunService {
   }
 
   private void phase(String phase) {
-    current.updateAndGet(r -> new Run(r.id(), r.env(), r.tags(), r.threads(), r.llm(), r.startedBy(), r.startedAt(),
+    current.updateAndGet(r -> new Run(r.id(), r.env(), r.tags(), r.threads(), r.ai(), r.startedBy(), r.startedAt(),
         r.status(), r.exitCode(), r.finishedAt(), r.summary(), r.reportUrl(), phase, r.lines()));
   }
 
   private void finish(Status status, Integer exit, String summary) {
     append("[platform] " + status.name().toLowerCase(Locale.ROOT) + (exit == null ? "" : " (exit " + exit + ")"));
-    current.updateAndGet(r -> new Run(r.id(), r.env(), r.tags(), r.threads(), r.llm(), r.startedBy(), r.startedAt(),
+    current.updateAndGet(r -> new Run(r.id(), r.env(), r.tags(), r.threads(), r.ai(), r.startedBy(), r.startedAt(),
         status, exit, Instant.now().toString(), summary, r.reportUrl(), "done", r.lines()));
     process = null;
   }
 
   private static Run withLines(Run r, int n) {
-    return new Run(r.id(), r.env(), r.tags(), r.threads(), r.llm(), r.startedBy(), r.startedAt(), r.status(), r.exitCode(),
+    return new Run(r.id(), r.env(), r.tags(), r.threads(), r.ai(), r.startedBy(), r.startedAt(), r.status(), r.exitCode(),
         r.finishedAt(), r.summary(), r.reportUrl(), r.phase(), n);
   }
 

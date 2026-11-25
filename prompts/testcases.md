@@ -24,7 +24,7 @@ Each case MUST follow src/main/resources/schemas/testcase.schema.json:
 - "tags": first the OpenAPI tag (or a short resource name), then e.g. "smoke" (positive P1), "regression"
 - "source": {"path", "method", "operationId"} of the operation under test (operationId: from the spec, else method+path in camelCase)
 - "request": {"pathParams", "queryParams", "headers", "auth", "body"}; auth = "default" | "none" | "invalid" | a profile name;
-  use ${testdata.<name>} for ids that must already exist, ${var.<name>} for values saved earlier, ${uuid} for unique values
+  use ${testdata.<name>} for ids that must already exist (the automation creates them when the spec has a create operation), ${var.<name>} for values saved earlier, ${uuid} for unique values
 - "expected": {"status", "schema" (the documented response schema, or null), "assertions": [{"path": "$.field", "op":
   "equals|notNull|contains|matches|size", "value"}], "maxResponseTimeMs" (optional)}
 - "notes": ["Reason: ...", "Assumption: ..."]
